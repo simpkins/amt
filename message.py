@@ -7,6 +7,8 @@ import email.header
 import email.parser
 import email.utils
 
+import imap_util
+
 
 class Message:
     '''
@@ -78,15 +80,15 @@ class Message:
         flags = set()
         custom_flags = set()
         for flag in imap_flags:
-            if flag == '\Seen':
+            if flag == imap_util.FLAG_SEEN:
                 flags.add(cls.FLAG_SEEN)
-            elif flag == '\Answered':
+            elif flag == imap_util.FLAG_ANSWERED:
                 flags.add(cls.FLAG_REPLIED_TO)
-            elif flag == '\Flagged':
+            elif flag == imap_util.FLAG_FLAGGED:
                 flags.add(cls.FLAG_FLAGGED)
-            elif flag == '\Deleted':
+            elif flag == imap_util.FLAG_DELETED:
                 flags.add(cls.FLAG_DELETED)
-            elif flag == '\Draft':
+            elif flag == imap_util.FLAG_DRAFT:
                 flags.add(cls.FLAG_DRAFT)
             else:
                 custom_flags.add(flag)

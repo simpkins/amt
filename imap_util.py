@@ -9,6 +9,16 @@ import re
 
 import ssl_util
 
+# Also expose the imaplib port constants as part of our public API.
+from imaplib import IMAP4_PORT, IMAP4_SSL_PORT
+
+FLAG_SEEN = r'\Seen'
+FLAG_ANSWERED = r'\Answered'
+FLAG_FLAGGED = r'\Flagged'
+FLAG_DELETED = r'\Deleted'
+FLAG_DRAFT =  r'\Draft'
+FLAG_RECENT =  r'\Recent'
+
 
 class ImapError(Exception):
     pass
@@ -17,7 +27,7 @@ class ImapError(Exception):
 class Connection:
     def __init__(self, server, port=None):
         if port is None:
-            port = imaplib.IMAP4_SSL_PORT
+            port = IMAP4_SSL_PORT
 
         ctx = ssl_util.new_ctx()
         self.conn = imaplib.IMAP4_SSL(host=server, port=port,
@@ -29,7 +39,12 @@ class Connection:
         self.conn.login(user=user, password=password)
 
     def select_mailbox(self, mailbox, readonly=False):
-        self.conn.select(mailbox, readonly=readonly)
+        typ, data = self.conn.select(mailbox, readonly=readonly)
+        _check_resp(typ, data, 'SELECT')
+
+    def create_mailbox(self, name):
+        typ, data = self.conn.create(name)
+        _check_resp(typ, data, 'CREATE')
 
     def search_msg_ids(self, *criteria):
         typ, data = self.conn.uid('SEARCH', *criteria)
@@ -42,48 +57,103 @@ class Connection:
         msg_ids = [int(str_id) for str_id in data[0].split()]
         return msg_ids
 
-    def fetch(self, msg_ids, parts, use_uid=True):
+    def fetch(self, msg_ids, parts, use_uids=True):
         '''
         Send a FETCH command to fetch the specified messages.
 
-        msg_ids must be a list of integer IDs.
+        msg_ids should be a list of integer message IDs.  A single message ID
+        (rather than a list) is also accepted.
+
+        parts should be a list of message data items to fetch (as specified in
+        RFC 3501 section 6.4.5).
+
+        Behaves slightly differently, depending on the msg_ids input:
+        - If msg_ids is a sequence of integer IDs, returns a dictionary
+          of msg_id --> data
+        - If msg_ids is a single integer, returns just the data for that
+          message.
         '''
         parts_arg = '(' + ' '.join(parts) + ')'
         ids_arg = self._create_sequence_set(msg_ids)
 
-        if use_uid:
+        if use_uids:
             typ, data = self.conn.uid('FETCH', ids_arg, parts_arg)
         else:
             typ, data = self.conn.fetch(ids_arg, parts_arg)
 
         _check_resp(typ, data, 'FETCH')
 
-        msgs = _parse_fetch_response(data)
-        assert len(msgs) == len(msg_ids)
-        return msgs
+        return _parse_fetch_response(data, msg_ids, use_uids)
 
-    def fetch_one(self, msg_id, parts, use_uid=True):
-        msgs = self.fetch([msg_id], parts, use_uid=use_uid)
-        assert len(msgs) == 1
-
-        resp_id, msg = next(iter(msgs.items()))
-        return msg
-
-    def copy(self, msg_id, mailbox, use_uid=True):
+    def copy_msg(self, msg_id, mailbox, use_uids=True):
         '''
         Copy message(s) from the selected mailbox to the mailbox with the
         specified name.
         '''
-        ids_arg = self._create_sequence_set(msg_id, allow_one=True)
+        ids_arg = self._create_sequence_set(msg_id)
 
-        if use_uid:
+        if use_uids:
             typ, data = self.conn.uid('COPY', ids_arg, mailbox)
         else:
-            typ, data = self.conn.fetch(ids_arg, mailbox)
+            typ, data = self.conn.copy(ids_arg, mailbox)
 
         _check_resp(typ, data, 'COPY')
 
-    def _create_sequence_set(self, msg_ids, allow_one=False):
+    def delete_msg(self, msg_id, expunge_now=False, use_uids=True):
+        self.add_flags(msg_id, [FLAG_DELETED], use_uids=use_uids)
+
+        if expunge_now:
+            self.expunge()
+
+    def expunge(self):
+        typ, data = self.conn.expunge()
+        _check_resp(typ, data, 'EXPUNGE')
+
+    def add_flags(self, msg_ids, flags, use_uids=True):
+        '''
+        Add the specified flags to the specified message(s)
+        '''
+        self._update_flags('+FLAGS.SILENT', msg_ids, flags, use_uids=use_uids)
+
+    def remove_flags(self, msg_ids, flags, use_uids=True):
+        '''
+        Remove the specified flags from the specified message(s)
+        '''
+        self._update_flags('-FLAGS.SILENT', msg_ids, flags, use_uids=use_uids)
+
+    def replace_flags(self, msg_ids, flags, use_uids=True):
+        '''
+        Replace the flags on the specified message(s) with the new list of
+        flags.
+        '''
+        self._update_flags('FLAGS.SILENT', msg_ids, flags, use_uids=use_uids)
+
+    def get_flags(self, msg_ids, use_uids=True):
+        responses = self.fetch(msg_ids, ['FLAGS'], use_uids=use_uids)
+        if isinstance(msg_ids, int):
+            return responses['FLAGS']
+        return dict((msg_id, data['FLAGS'])
+                    for msg_id, data in responses.items())
+
+    def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
+        if isinstance(flags, str):
+            flags = [flags]
+        flags_arg = '(%s)' % ' '.join(flags)
+
+        ids_arg = self._create_sequence_set(msg_ids)
+        if use_uids:
+            typ, data = self.conn.uid('STORE', ids_arg, cmd, flags_arg)
+        else:
+            typ, data = self.conn.store(ids_arg, data_item, flags_arg)
+
+        _check_resp(typ, data, 'STORE')
+        # Note that we could call _parse_fetch_response() to parse the response
+        # data here.  Unfortunately, if use_uids is True, the "UID STORE"
+        # response does not include UIDs, so we won't be able to figure out
+        # which response is for which message.  Therefore, for now we just
+        # ignore the response data and always use FLAGS.SILENT when storing.
+
+    def _create_sequence_set(self, msg_ids, allow_one=True):
         if allow_one and isinstance(msg_ids, int):
             return str(msg_ids).encode('ASCII')
         return b','.join(str(i).encode('ASCII') for i in msg_ids)
@@ -95,12 +165,29 @@ def _check_resp(typ, data, cmd):
                         (cmd, typ, data))
 
 
-def _parse_fetch_response(data):
+def _parse_fetch_response(data, msg_ids, use_uids):
     responses = _reassemble_fetch_resp(data)
+
+    if isinstance(msg_ids, int):
+        # If a single message was requested, return just the single response
+        # for that message.
+        assert len(responses) == 1
+        parser = _FetchParser(responses[0])
+        msg_seq, attributes = parser.parse()
+        if use_uids:
+            assert attributes['UID'] == msg_ids
+        else:
+            assert msg_seq == msg_ids
+        return attributes
+
+    assert len(responses) == len(msg_ids)
     resp_dict = {}
     for resp in responses:
         parser = _FetchParser(resp)
         msg_seq, attributes = parser.parse()
+        if use_uids:
+            msg_seq = attributes['UID']
+        assert msg_seq in msg_ids
         resp_dict[msg_seq] = attributes
 
     return resp_dict
