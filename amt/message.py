@@ -7,7 +7,7 @@ import email.header
 import email.parser
 import email.utils
 
-import imap_util
+from . import imap_util
 
 
 class Message:

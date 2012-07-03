@@ -7,7 +7,7 @@ import imaplib
 import logging
 import re
 
-import ssl_util
+from . import ssl_util
 
 # Also expose the imaplib port constants as part of our public API.
 from imaplib import IMAP4_PORT, IMAP4_SSL_PORT
