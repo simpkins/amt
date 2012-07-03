@@ -53,8 +53,9 @@ class ConfigInstantiation(Config):
 
     def process_msg(self, msg, processor):
         logging.debug('From: %s;  To: %s', msg.from_addr, msg.to)
-        #processor.copy_to(self.backup_mailbox)
-        #self.dest_maildir.add(msg)
+        processor.copy_to(self.backup_mailbox)
+        self.dest_maildir.add(msg)
+        processor.delete_msg()
 
 
 class MessageProcessor:
@@ -66,8 +67,8 @@ class MessageProcessor:
     def copy_to(self, mailbox):
         self.imap_conn.copy_msg(self.imap_uid, mailbox)
 
-    def delete(self, expunge_now=False):
-        self.imap_conn.delete_msg(self.imap_uid
+    def delete_msg(self, expunge_now=False):
+        self.imap_conn.delete_msg(self.imap_uid, expunge_now=expunge_now)
 
 
 class MailProcessor:
@@ -87,11 +88,12 @@ class MailProcessor:
     def setup_conn(self):
         self.conn = imap_util.Connection(self.config.server, self.config.port)
         self.conn.login(self.config.user, self.config.password)
-        self.conn.select_mailbox(self.config.mailbox, readonly=True)
+        self.conn.select_mailbox(self.config.mailbox)
 
     def run_once(self):
-        msg_ids = self.conn.search_msg_ids('ALL')
-        logging.info('%d messages', len(msg_ids))
+        msg_ids = self.conn.search_msg_ids('NOT DELETED')
+        logging.info('Fetching messages: mailbox has %d messages to consider',
+                     len(msg_ids))
 
         for uid in msg_ids:
             if not self.config.should_process_msg(uid):
@@ -108,7 +110,10 @@ class MailProcessor:
             self.config.process_msg(msg, processor)
 
             # Debugging: only process one message for now
-            break
+            #break
+
+        # Debugging: don't expunge for now
+        #self.conn.expunge()
 
 
 def main():
