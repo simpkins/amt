@@ -17,8 +17,8 @@ class Message:
 
     Independent of the underlying mailbox type.
     Uses email.message.Message internally, but provides a more user-friendly
-    interface.  Also keeps track of the receipt timestamp, and any message
-    flags that associated with it.
+    interface.  Also keeps track of the receipt timestamp, and any flags
+    associated with the message.
     '''
     FLAG_NEW = 'N'
     FLAG_SEEN = 'S'
@@ -269,7 +269,23 @@ class Message:
         addresses = email.utils.getaddresses(values)
         return AddressList(addresses)
 
+    def remove_header(self, name):
+        '''
+        Delete all occurences of a header.
+
+        Does nothing if the header was not present.
+        '''
+        del self.msg[name]
+
+    def add_header(self, name, value):
+        self.msg[name] = self._decode_header(name, value)
+
     def _decode_header(self, name, value, errors='replace'):
+        # TODO: Newer versions of python support a 'policy' argument to the
+        # email.message.Message constructor, which we could use instead of
+        # having to manually invoke _decode_header() in our own wrapper
+        # functions.
+
         if hasattr(name, '_chunks'):
             # Looks like it is already an email.header.Header object
             return value
