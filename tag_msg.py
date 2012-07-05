@@ -8,7 +8,7 @@ import logging
 import sys
 
 import amt.config
-import amt.fetchmail
+from amt.message import Message
 
 
 def main():
@@ -26,9 +26,14 @@ def main():
         logging.basicConfig(level=logging.INFO)
 
     config = amt.config.load_config(args.config_path)
-    fetchmail_config = config.FetchmailConfig()
-    processor = amt.fetchmail.MailProcessor(fetchmail_config)
-    processor.run()
+
+    data = sys.stdin.buffer.read()
+    msg = Message.from_bytes(data)
+    tags = config.MailClassifier().get_tags(msg)
+
+    print('%d tags' % len(tags))
+    for tag in tags:
+        print('  ' + tag.name)
 
 
 if __name__ == '__main__':

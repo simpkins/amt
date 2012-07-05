@@ -93,17 +93,3 @@ class MailProcessor:
             self.conn.expunge()
         else:
             logging.info('No messages to process')
-
-
-def run(config_file):
-    with open(config_file, 'r') as f:
-        data = f.read()
-
-    code = compile(data, config_file, 'exec')
-    config_dict = {}
-    exec(code, config_dict, config_dict)
-
-    config = config_dict['config']
-
-    processor = MailProcessor(config)
-    processor.run()

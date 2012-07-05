@@ -1,4 +1,4 @@
-#!/usr/local/bin/python2.6 -tt
+#!/usr/bin/python3 -tt
 #
 # Copyright (c) 2012, Adam Simpkins
 #
@@ -6,7 +6,7 @@ import amt.fetchmail
 from amt import maildir
 
 
-class Config(amt.fetchmail.MailboxConfig):
+class FetchmailConfig(amt.fetchmail.MailboxConfig):
     def __init__(self):
         super().__init__()
         self.server = 'imap.example.com'
@@ -24,6 +24,3 @@ class Config(amt.fetchmail.MailboxConfig):
         processor.copy_to(self.backup_mailbox)
         self.dest_maildir.add(msg)
         processor.delete_msg()
-
-
-config = Config()

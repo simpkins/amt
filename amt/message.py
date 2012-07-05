@@ -6,6 +6,7 @@ import datetime
 import email.header
 import email.parser
 import email.utils
+import time
 
 from . import imap_util
 
@@ -34,7 +35,7 @@ class Message:
         if isinstance(timestamp, datetime.datetime):
             self.datetime = timestamp
             self.timestamp = timestamp.timestamp()
-        elif isinstance(timestamp, (int, long)):
+        elif isinstance(timestamp, (int, float)):
             self.timestamp = timestamp
             self.datetime = datetime.datetime.fromtimestamp(timestamp)
         else:
@@ -47,22 +48,41 @@ class Message:
         self.custom_flags = custom_flags
 
         # Parse commonly used fields
-        self.to = AddressList()
-        self.cc = AddressList()
-        self.from_addr = AddressList()
-        self.subject = None
+        # These should be accessed with the @property methods below,
+        # since we currently don't support updating self.msg when they are
+        # changed.
+        self._to = AddressList()
+        self._cc = AddressList()
+        self._from_addr = AddressList()
+        self._subject = None
         for k, v in self.msg._headers:
             if k.lower() == 'to':
-                self.to.extend(self._parse_addresses(v))
+                self._to.extend(self._parse_addresses(v))
             elif k.lower() == 'cc':
-                self.cc.extend(self._parse_addresses(v))
+                self._cc.extend(self._parse_addresses(v))
             elif k.lower() == 'from':
-                self.from_addr.extend(self._parse_addresses(v))
-            elif self.subject is None and k.lower() == 'subject':
-                self.subject = self._decode_header(k, v)
+                self._from_addr.extend(self._parse_addresses(v))
+            elif self._subject is None and k.lower() == 'subject':
+                self._subject = str(self._decode_header(k, v))
 
         # The body will be parsed lazily if needed
         self._body_text = None
+
+    @property
+    def to(self):
+        return self._to
+
+    @property
+    def cc(self):
+        return self._cc
+
+    @property
+    def from_addr(self):
+        return self._from_addr
+
+    @property
+    def subject(self):
+        return self._subject or ''
 
     @classmethod
     def from_imap(cls, fetch_response):
@@ -134,6 +154,23 @@ class Message:
         custom_flags = set()
         return cls(msg, timestamp, flags, custom_flags)
 
+    @classmethod
+    def from_bytes(cls, data, timestamp=None, flags=None, custom_flags=None):
+        if timestamp is None:
+            timestamp = time.time()
+        if flags is None:
+            flags = set()
+        else:
+            assert isinstance(flags, set)
+        if custom_flags is None:
+            custom_flags = set()
+        else:
+            assert isinstance(flags, set)
+
+        parser = email.parser.BytesParser()
+        msg = parser.parsebytes(data)
+        return cls(msg, timestamp, flags, custom_flags)
+
     def compute_maildir_info(self):
         '''
         Compute the maildir info string to be appended to the end of a maildir
@@ -174,10 +211,25 @@ class Message:
         exists with this name.
         '''
         name = name.lower()
-        for k, v in self._headers:
+        for k, v in self.msg._headers:
             if k.lower() == name:
                 return self._decode_header(k, v)
         return default
+
+    def get(self, name, default=None):
+        '''
+        Get the value of a specified header.
+
+        If the header appears multiple times in the message, only the first
+        instance is returned.
+
+        Returns a string, or the specified default if no header exists with
+        this name.
+        '''
+        hdr = self.get_header(name)
+        if hdr is None:
+            return default
+        return str(hdr)
 
     def get_header_all(self, name, default=None):
         '''
@@ -188,13 +240,34 @@ class Message:
         '''
         results = []
         name = name.lower()
-        for k, v in self._headers:
+        for k, v in self.msg._headers:
             if k.lower() == name:
                 results.append(self._decode_header(k, v))
 
         if not results:
             return default
         return results
+
+    def get_all(self, name, default=None):
+        '''
+        Return a list of all headers with the specified name.
+
+        Returns a list of strings, or the specified default if no header exists
+        with this name.
+        '''
+        hdrs = self.get_header_all(name, None)
+        if hdrs is None:
+            return default
+        return [str(hdr) for hdr in hdrs]
+
+    def get_addresses(self, header):
+        '''
+        Get all instances of the specified header, parse them as addresses, and
+        return them as an AddressList.
+        '''
+        values = self.get_all(header, [])
+        addresses = email.utils.getaddresses(values)
+        return AddressList(addresses)
 
     def _decode_header(self, name, value, errors='replace'):
         if hasattr(name, '_chunks'):
