@@ -6,8 +6,10 @@ import datetime
 import imaplib
 import logging
 import re
+import socket
 
 from . import ssl_util
+from . import message
 
 # Also expose the imaplib port constants as part of our public API.
 from imaplib import IMAP4_PORT, IMAP4_SSL_PORT
@@ -24,15 +26,20 @@ class ImapError(Exception):
     pass
 
 
+class NoMessageIdsError(ValueError):
+    def __str__(self):
+        return 'no message IDs specified'
+
+
 class Connection:
-    def __init__(self, server, port=None):
+    def __init__(self, server, port=None, timeout=60):
         if port is None:
             port = IMAP4_SSL_PORT
 
         ctx = ssl_util.new_ctx()
         self.conn = imaplib.IMAP4_SSL(host=server, port=port,
                                       ssl_context=ctx)
-        self.conn.sock.settimeout(60)
+        self.conn.sock.settimeout(timeout)
         logging.debug('Server capabilities: %s', self.conn.capabilities)
 
     def login(self, user, password):
@@ -73,8 +80,13 @@ class Connection:
         - If msg_ids is a single integer, returns just the data for that
           message.
         '''
+        try:
+            ids_arg = self._create_sequence_set(msg_ids)
+        except NoMessageIdsError:
+            # Just return an empty dictionary if an empty list of message IDs
+            # was specified.
+            return {}
         parts_arg = '(' + ' '.join(parts) + ')'
-        ids_arg = self._create_sequence_set(msg_ids)
 
         if use_uids:
             typ, data = self.conn.uid('FETCH', ids_arg, parts_arg)
@@ -84,6 +96,18 @@ class Connection:
         _check_resp(typ, data, 'FETCH')
 
         return _parse_fetch_response(data, msg_ids, use_uids)
+
+    def fetch_msg(self, msg_ids, use_uids=True):
+        parts = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
+        response = self.fetch(msg_ids, parts, use_uids=use_uids)
+
+        if isinstance(msg_ids, int):
+            # A single message
+            return fetch_response_to_msg(response)
+
+        resp_dict = dict((msg_id, fetch_response_to_msg(msg_data))
+                         for msg_id, msg_data in response.items())
+        return resp_dict
 
     def copy_msg(self, msg_id, mailbox, use_uids=True):
         '''
@@ -135,6 +159,48 @@ class Connection:
         return dict((msg_id, data['FLAGS'])
                     for msg_id, data in responses.items())
 
+    imaplib.Commands['IDLE'] = ('SELECTED',)
+
+    def idle(self, callback, timeout=-1, timeout_callback=None):
+        # imaplib doesn't support IDLE, so we build it ourselves.
+        # Currently we're using a bunch of the non-public functions, which is
+        # kind of crappy.
+
+        tag = self.conn._command('IDLE')
+
+        # Wait for a continuation response
+        while self.conn._get_response():
+            if self.tagged_commands[tag]:
+                return self.conn._command_complete('IDLE', tag)
+
+        # Flush old responses
+        logging.debug('dropping %d old untagged responses when entering '
+                      'IDLE (%r)', len(self.conn.untagged_responses),
+                      self.conn.untagged_responses)
+        self.conn.untagged_responses = {}
+
+        orig_timeout = None
+        if timeout is None or timeout >= 0:
+            orig_timeout = self.conn.sock.gettimeout()
+            self.conn.sock.settimeout(timeout)
+        try:
+            # Wait for untagged responses
+            while True:
+                try:
+                    self.conn._get_response()
+                except socket.timeout:
+                    break
+
+                for typ, responses in self.conn.untagged_responses:
+                    for resp in responses:
+                        idle_callback(typ, resp)
+        finally:
+            if orig_timeout is not None:
+                self.conn.sock.settimeout(orig_timeout)
+
+        self.conn.send(b'DONE\r\n')
+        return self.conn._command_complete('IDLE', tag)
+
     def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
         if isinstance(flags, str):
             flags = [flags]
@@ -156,6 +222,8 @@ class Connection:
     def _create_sequence_set(self, msg_ids, allow_one=True):
         if allow_one and isinstance(msg_ids, int):
             return str(msg_ids).encode('ASCII')
+        if not msg_ids:
+            raise NoMessageIdsError()
         return b','.join(str(i).encode('ASCII') for i in msg_ids)
 
 
@@ -448,3 +516,32 @@ class _FetchParser:
     def _parse_number(self):
         m = self._parse_re(self._NUMBER_RE)
         return int(m.group(1), 10)
+
+
+def fetch_response_to_msg(response):
+    '''
+    Create a new Message from an IMAP FETCH response that includes at
+    least BODY[], INTERNALDATE, and FLAGS fields.
+    '''
+    body = response['BODY[]']
+    timestamp = response['INTERNALDATE']
+    imap_flags = response['FLAGS']
+
+    flags = set()
+    custom_flags = set()
+    for flag in imap_flags:
+        if flag == FLAG_SEEN:
+            flags.add(message.Message.FLAG_SEEN)
+        elif flag == FLAG_ANSWERED:
+            flags.add(message.Message.FLAG_REPLIED_TO)
+        elif flag == FLAG_FLAGGED:
+            flags.add(message.Message.FLAG_FLAGGED)
+        elif flag == FLAG_DELETED:
+            flags.add(message.Message.FLAG_DELETED)
+        elif flag == FLAG_DRAFT:
+            flags.add(message.Message.FLAG_DRAFT)
+        else:
+            custom_flags.add(flag)
+
+    return message.Message.from_bytes(body, timestamp=timestamp, flags=flags,
+                                      custom_flags=custom_flags)

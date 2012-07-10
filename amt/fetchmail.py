@@ -76,13 +76,7 @@ class MailProcessor:
             if not self.config.should_process_msg(uid):
                 continue
 
-            parts = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
-            msg = self.conn.fetch(uid, parts)
-            if msg['UID'] != uid:  # Just for sanity
-                raise Exception('unexpected UID: asked for %s, got %s' %
-                                (uid, msg['UID']))
-
-            msg = Message.from_imap(msg)
+            msg = self.conn.fetch_msg(uid)
             processor = MessageProcessor(msg, self.conn, uid)
             self.config.process_msg(msg, processor)
             num_processed += 1

@@ -8,8 +8,6 @@ import email.parser
 import email.utils
 import time
 
-from . import imap_util
-
 
 class Message:
     '''
@@ -83,37 +81,6 @@ class Message:
     @property
     def subject(self):
         return self._subject or ''
-
-    @classmethod
-    def from_imap(cls, fetch_response):
-        '''
-        Create a new Message from an IMAP FETCH response that includes at
-        least BODY[], INTERNALDATE, and FLAGS fields.
-        '''
-        body = fetch_response['BODY[]']
-        timestamp = fetch_response['INTERNALDATE']
-        imap_flags = fetch_response['FLAGS']
-
-        parser = email.parser.BytesParser()
-        msg = parser.parsebytes(body)
-
-        flags = set()
-        custom_flags = set()
-        for flag in imap_flags:
-            if flag == imap_util.FLAG_SEEN:
-                flags.add(cls.FLAG_SEEN)
-            elif flag == imap_util.FLAG_ANSWERED:
-                flags.add(cls.FLAG_REPLIED_TO)
-            elif flag == imap_util.FLAG_FLAGGED:
-                flags.add(cls.FLAG_FLAGGED)
-            elif flag == imap_util.FLAG_DELETED:
-                flags.add(cls.FLAG_DELETED)
-            elif flag == imap_util.FLAG_DRAFT:
-                flags.add(cls.FLAG_DRAFT)
-            else:
-                custom_flags.add(flag)
-
-        return cls(msg, timestamp, flags, custom_flags)
 
     @classmethod
     def from_maildir(cls, path):
