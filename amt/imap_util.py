@@ -5,6 +5,7 @@
 import datetime
 import imaplib
 import logging
+import random
 import re
 import socket
 
@@ -21,9 +22,40 @@ FLAG_DELETED = r'\Deleted'
 FLAG_DRAFT =  r'\Draft'
 FLAG_RECENT =  r'\Recent'
 
+IMAP_PORT = 143
+IMAPS_PORT = 993
+
+STATE_NOT_AUTHENTICATED = 'not auth'
+STATE_AUTHENTICATED = 'auth'
+STATE_SELECTED = 'selected'
+STATE_LOGOUT = 'logout'
+
 
 class ImapError(Exception):
-    pass
+    def __init__(self, msg, *args):
+        if args:
+            self.msg = msg % args
+        else:
+            self.msg = msg
+
+    def __str__(self):
+        return self.msg
+
+
+class EofError(ImapError):
+    def __init__(self, msg=None, *args):
+        if msg is None:
+            msg = 'received EOF'
+        super().__init__(msg, *args)
+
+
+class ParseError(ImapError):
+    def __init__(self, line, msg=None, *args):
+        self.line = line
+        super().__init__(msg, *args)
+
+    def __str__(self):
+        return 'IMAP parse error: %s: %r' % (self.msg, self.line)
 
 
 class NoMessageIdsError(ValueError):
@@ -31,7 +63,346 @@ class NoMessageIdsError(ValueError):
         return 'no message IDs specified'
 
 
+class ResponseParser:
+    def __init__(self, conn):
+        self.conn = conn
+        self.resp_token_map = None
+
+    def get_response(self):
+        self.line = self.conn._get_line()
+        self.idx = 0
+
+        # All responses start with either:
+        #   ("+" / "*" / tag) SP
+        self.tag = self._parse_token_sp('initial tag')
+
+        if self.tag == b'+':
+            # continue-req
+            # This is followed by (resp-text / base64)
+            # base64 data would look just like resp-text, so just call
+            # _parse_resp_text()
+            text = self._parse_resp_text()
+            return (self.tag, text)
+        elif self.tag == b'*':
+            # response-data
+            result = self._parse_response_data()
+            return (self.tag,) + result
+        else:
+            # TODO: We could verify that the tag is a valid tag according to
+            # RFC 3501.  Tags may only contain ASCII 0x20-0x7E, except
+            # b'+(){ # %*"\\'
+            status, text = self._parse_resp_cond_state()
+            return (self.tag, status, text)
+
+    def parse_error(self, msg, *args):
+        raise ParseError(self.line, msg, *args)
+
+    def advance_over(self, data):
+        if len(self.line) < self.idx + len(data):
+            self.parse_error('expected %r at offset %d', data, self.idx)
+
+        actual = self.line[self.idx:self.idx + len(data)]
+        if actual != data:
+            self.parse_error('expected %r at offset %d, found %r',
+                             data, self.idx, actual)
+
+        self.idx += len(data)
+
+    def _parse_token_sp(self, name):
+        '''
+        Parse a simple token followed by a space.
+        '''
+        sp_idx = self.line.find(b' ', self.idx)
+        if sp_idx < 0:
+            self.parse_error('missing space after %s', name)
+
+        token = self.line[self.idx:sp_idx]
+        self.idx = sp_idx + 1
+        return token
+
+    def _parse_response_data(self):
+        if self.resp_token_map is None:
+            self.resp_token_map = {
+                # resp-cond-state
+                b'OK': (self._parse_resp_text, True),
+                b'NO': (self._parse_resp_text, True),
+                b'BAD': (self._parse_resp_text, True),
+                # resp-cond-auth
+                b'PREAUTH': (self._parse_resp_text, True),
+                # resp-cond-bye
+                b'BYE': (self._parse_resp_text, True),
+                # mailbox-data
+                b'FLAGS': (self._parse_flag_list, True),
+                b'LIST': (self._parse_mailbox_list, True),
+                b'LSUB': (self._parse_mailbox_list, True),
+                b'SEARCH': (self._parse_nz_numbers, True),
+                b'STATUS': (self._parse_status_response, False),
+                # capability-data
+                b'CAPABILITY': (self._parse_capabilities, True),
+            }
+
+        # All of the response-data and response-done formats start with
+        # either a fixed ascii string or a number followed by a space.
+        # Parse this first atom, and return it followed by everything else.
+        token = self._parse_token_sp('response-data token')
+
+        info = self.resp_token_map.get(token)
+        if info is not None:
+            parse_fn, make_tuple = info
+            result = parse_fn()
+            if make_tuple:
+                return (token, result)
+            else:
+                assert isinstance(result, tuple)
+                return (token,) + result
+
+        # Else token should be a message number
+        try:
+            msg_id = int(token)
+        except ValueError:
+            self.parse_error('expected message number or valid response-data '
+                             'token, got %r', token)
+
+        next_token = self._parse_token_sp('message-data token')
+        if next_token in (b'EXISTS', b'RECENT', b'EXPUNGE'):
+            self.check_eol()
+            return (msg_id, next_token)
+        elif next_token == b'FETCH':
+            self.advance_over(b' ')
+            msg_att = self._parse_msg_att()
+            return (msg_id, next_token, msg_att)
+
+    def _parse_resp_cond_state(self):
+        status = self._parse_token_sp('response status')
+        if status not in (b'OK', b'NO', b'BAD'):
+            self.parse_error('unexpected response status %r', status)
+
+        text = self._parse_resp_text()
+        return (status, text)
+
+    def _parse_flag_list(self):
+        raise NotImplementedError('not implemented: _parse_flag_list')
+
+    def _parse_mailbox_list(self):
+        raise NotImplementedError('not implemented: _parse_mailbox_list')
+
+    def _parse_mailbox_list(self):
+        raise NotImplementedError('not implemented: _parse_mailbox_list')
+
+    def _parse_nz_numbers(self):
+        raise NotImplementedError('not implemented: _parse_nz_numbers')
+
+    def _parse_status_response(self):
+        raise NotImplementedError('not implemented: _parse_status_response')
+
+    def _parse_capabilities(self):
+        # Just split the remainder of the line on spaces.
+        # TODO: We should perhaps check that these are valid atoms
+        return self._get_remainder().split(b' ')
+
+    def _parse_msg_att(self):
+        raise NotImplementedError('not implemented: _parse_msg_att')
+
+    def _parse_resp_text(self):
+        if len(self.line) == self.idx:
+            return ''
+
+        if self.line[self.idx] == b'[':
+            self.idx += 1
+            code = self._parse_resp_text_code()
+            self.advance_over(b'] ')
+
+        # FIXME: return code somehow
+        return self.line[self.idx:]
+
+    def _parse_resp_text_code(self):
+        raise NotImplementedError('not implemented: parsing resp-text-code')
+
+    def _get_remainder(self):
+        rest = self.line[self.idx:]
+        self.idx = len(self.line)
+        return rest
+
+    def check_eol(self):
+        if self.idx != len(self.line):
+            self.parse_error('expected end of line at offset %d, but still '
+                             'have unparsed data left', self.idx)
+
+
 class Connection:
+    def __init__(self, server, port=None, timeout=60, ssl=True):
+        if port is None:
+            if ssl:
+                port = IMAPS_PORT
+            else:
+                port = IMAP_PORT
+
+        self._pending_data = None
+        self._server_capabilities = None
+        tag_prefix = ''.join(random.sample('ABCDEFGHIJKLMNOP', 4))
+        self._tag_prefix = bytes(tag_prefix, 'ASCII')
+        self._next_tag = 1
+
+        self.raw_sock = socket.create_connection((server, port),
+                                                 timeout=timeout)
+        ctx = ssl_util.new_ctx()
+        if ssl:
+            self.sock = ctx.wrap_socket(self.raw_sock)
+        else:
+            self.sock = self.raw_sock
+
+        # Receive the server greeting
+        resp = self.get_response()
+        if resp[1] == b'OK':
+            self.state = STATE_NOT_AUTHENTICATED
+        elif resp[1] == b'PREAUTH':
+            self.state = STATE_AUTHENTICATED
+        elif resp[1] == b'BYE':
+            raise ImapError('server responded with BYE greeting')
+        else:
+            raise ImapError('server responded with unexpected greeting: %r',
+                            resp)
+
+    def get_capabilities(self):
+        if self._server_capabilities is None:
+            tag = self.send_request(b'CAPABILITY')
+            while True:
+                resp = self.get_response()
+                if resp[0] == b'*' and resp[1] == b'CAPABILITY':
+                    self._server_capabilities = resp[2]
+                elif resp[0] == tag:
+                    self.check_status(resp)
+                    break
+                else:
+                    logging.debug('ignoring unexpected response during '
+                                  'CAPABILITY command: %r', resp)
+            if self._server_capabilities is None:
+                raise ImapError('didn\'t see CAPABILITY response')
+
+        return self._server_capabilities
+
+    def login(self, user, password):
+        if isinstance(user, str):
+            user = user.encode('ASCII')
+        if isinstance(password, str):
+            password = password.encode('ASCII')
+        tag = self.send_request(b'LOGIN', self.to_astring(user),
+                                self.to_astring(password),
+                                suppress_log=True)
+
+        while True:
+            resp = self.get_response()
+            if resp[0] == b'*' and resp[1] == b'CAPABILITY':
+                self._server_capabilities = resp[2]
+            elif resp[0] == tag:
+                self.check_status(resp)
+                break
+            else:
+                logging.debug('ignoring unexpected response during '
+                              'LOGIN command: %r', resp)
+
+    def select_mailbox(self, mailbox, readonly=False):
+        raise NotImplementedError('select_mailbox is not implemented')
+
+    def send_request(self, command, *args, suppress_log=False):
+        tag = self.get_new_tag()
+
+        msg = b' '.join((tag, command) + args)
+        if suppress_log:
+            logging.debug('sending:  %r <args suppressed>', command)
+        else:
+            logging.debug('sending:  %r', msg)
+        self.sock.sendall(msg + b'\r\n')
+        return tag
+
+    def check_status(self, response):
+        if response[1] != b'OK':
+            raise ImapError('got non-OK response: %r', response)
+
+    def get_new_tag(self):
+        tag = self._tag_prefix + bytes(str(self._next_tag), 'ASCII')
+        self._next_tag += 1
+        return tag
+
+    def get_response(self):
+        '''
+        Read a single response.  This may be tagged or untagged, or even a
+        continuation request.
+        '''
+        parser = ResponseParser(self)
+        return parser.get_response()
+
+    def to_astring(self, value):
+        if len(value) > 256:
+            return to_literal(value)
+
+        # TODO: We could just return the value itself if it doesn't contain
+        # any atom-specials.
+        return self.to_quoted(value)
+
+    def to_literal(self, value):
+        prefix = b'{' + bytes(str(len(value)), 'ASCII') + b'}\r\n'
+        return prefix + value
+
+    def to_quoted(self, value):
+        escaped = value.replace(b'\\', b'\\\\').replace(b'"', b'\\"')
+        return b'"' + escaped + b'"'
+
+    def _get_line(self):
+        if self._pending_data:
+            idx = self._pending_data.find(b'\r\n')
+            if idx >= 0:
+                line = self._pending_data[:idx]
+                self._pending_data = self._pending_data[idx+2:]
+                return line
+
+        while True:
+            buf = self.sock.recv(4096)
+            if not buf:
+                raise EofError()
+
+            idx = buf.find(b'\r\n')
+            if idx >= 0:
+                line = buf[:idx]
+                if self._pending_data:
+                    line = self._pending_data + line
+                self._pending_data = buf[idx+2:]
+                return line
+
+            self._pending_data = self._pending_data + buf
+
+    def _old_get_line(self):
+        if not self._lines:
+            self._recv_lines()
+
+        line = self._lines.pop(0)
+        logging.debug('got line: %r', line)
+        return line
+
+    def _recv_lines(self):
+        assert not self._lines
+
+        while True:
+            buf = self.sock.recv(4096)
+            if not buf:
+                raise EofError()
+
+            if self._pending_data:
+                buf = self._pending_data + buf
+                self._pending_data = None
+
+            parts = buf.split(b'\r\n')
+            if len(parts) == 1:
+                self._partial_line = parts[0]
+                continue
+
+            self._lines = parts[:-1]
+            self._partial_line = parts[-1]
+            return
+
+
+
+class OldConnection:
     def __init__(self, server, port=None, timeout=60):
         if port is None:
             port = IMAP4_SSL_PORT
