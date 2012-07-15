@@ -109,7 +109,7 @@ class ResponseStreamTests(unittest.TestCase):
         self.assertIsInstance(cmd, imap.ContinuationResponse)
         self.assertEqual(cmd.tag, b'+')
         self.assertEqual(cmd.resp_type, None)
-        self.assertEqual(cmd.resp_text, b'some stuff here')
+        self.assertEqual(cmd.text, b'some stuff here')
 
     def test_state_cmd(self):
         self.stream.feed(b'A001 OK foo bar\r\n')
@@ -117,7 +117,23 @@ class ResponseStreamTests(unittest.TestCase):
         self.assertIsInstance(cmd, imap.StateResponse)
         self.assertEqual(cmd.tag, b'A001')
         self.assertEqual(cmd.resp_type, b'OK')
-        self.assertEqual(cmd.resp_text, b'foo bar')
+        self.assertEqual(cmd.text, b'foo bar')
+        self.assertEqual(cmd.code, None)
+
+    def test_resp_code(self):
+        self.stream.feed(b'A001 OK [ALERT] foo bar\r\n')
+        cmd = self.pop_cmd()
+        self.assertIsInstance(cmd, imap.StateResponse)
+        self.assertEqual(cmd.tag, b'A001')
+        self.assertEqual(cmd.resp_type, b'OK')
+        self.assertEqual(cmd.text, b'foo bar')
+        self.assertEqual(cmd.code.token, b'ALERT')
+        self.assertEqual(cmd.code.data, None)
+
+        self.stream.feed(b'A001 OK [CAPABILITY FOO IMAP4rev1] foo bar\r\n')
+        cmd = self.pop_cmd()
+        self.assertEqual(cmd.code.token, b'CAPABILITY')
+        self.assertEqual(cmd.code.data, [b'FOO', b'IMAP4rev1'])
 
     def test_capability_cmd(self):
         self.stream.feed(b'* CAPABILITY AUTH=PLAIN IMAP4 IMAP4rev1 '

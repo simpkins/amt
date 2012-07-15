@@ -2,6 +2,8 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import logging
+
 from .err import ImapError, ParseError
 
 _ASCII_CR = ord(b'\r')
@@ -10,6 +12,21 @@ _ASCII_OPEN_BRACE = ord(b'{')
 _ASCII_CLOSE_BRACE = ord(b'}')
 
 
+# Note: This class is somewhat heuristic, and makes a best effort to detect
+# command boundaries, but it isn't guaranteed to be right.
+#
+# Currently the only case where it may be wrong is if the server ends a
+# resp-text section with something that looks like the start of a string
+# literal ({NNN}\r\n).  Hopefully no sane servers do this.  Python's built-in
+# imaplib module would also interpret such a response incorrectly.
+#
+# IMAP seems like a fairly stupidly designed language from a parsing
+# perspective.  You can't detect command boundaries without knowing exactly
+# what the command is and how it should be parsed.  You can't even tokenize the
+# data: In some cases a DQUOTE indicates the start of a quoted string, in some
+# cases it's not special at all.  In some cases {NNN} followed by CRLF
+# indicates the start of a string literal, in some cases its just normal data
+# and the CRLF indicates the end of the command.
 class CommandSplitter:
     '''
     CommandSplitter accepts data via the feed() function, and splits it up into
@@ -140,6 +157,7 @@ class CommandSplitter:
     def _on_full_line(self):
         assert self._current_bufs
         line = b''.join(self._current_bufs)
+        logging.debug('Response line: %s', line)
         self._current_bufs = []
         line, literal_count = self._strip_literal_length(line)
         self._cmd_parts.append(line)
