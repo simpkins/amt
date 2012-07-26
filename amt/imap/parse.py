@@ -50,10 +50,17 @@ class CapabilityResponse(Response):
         super().__init__(tag, b'CAPABILITY')
         self.capabilities = capabilities
 
+
 class FlagsResponse(Response):
     def __init__(self, tag, flags):
         super().__init__(tag, b'FLAGS')
         self.flags = flags
+
+
+class SearchResponse(Response):
+    def __init__(self, tag, msg_numbers):
+        super().__init__(tag, b'SEARCH')
+        self.msg_numbers = msg_numbers
 
 
 class NumericResponse(Response):
@@ -113,13 +120,17 @@ class ResponseParser:
             return self.parse_capability_response()
         elif self.resp_type == b'FLAGS':
             return self.parse_flags_response()
+        elif self.resp_type == b'SEARCH':
+            return self.parse_search_response()
 
         #b'LIST': UnknownResponseParser,  # TODO
         #b'LSUB': UnknownResponseParser,  # TODO
-        #b'SEARCH': UnknownResponseParser,  # TODO
         #b'STATUS': UnknownResponseParser,  # TODO
 
         return UnknownResponse(self.tag, self.resp_type, self.parts)
+
+    def error(self, msg, *args):
+        raise ParseError(self.parts, msg, *args)
 
     def parse_numeric_response(self):
         if self.resp_type in (b'EXISTS', b'RECENT', b'EXPUNGE'):
@@ -157,22 +168,45 @@ class ResponseParser:
         flags = flags_str.split(b' ')
         return FlagsResponse(self.tag, flags)
 
+    def parse_search_response(self):
+        if self.is_at_eom():
+            return SearchResponse(self.tag, [])
+
+        self.advance_over(b' ')
+        data = self.get_remainder()
+        msg_number_strings = data.split(b' ')
+        msg_nums = []
+        for num_str in msg_number_strings:
+            try:
+                num = int(num_str)
+            except ValueError:
+                self.error('invalid message number in SEARCH response: %r',
+                           num_str)
+            msg_nums.append(num)
+
+        return SearchResponse(self.tag, msg_nums)
+
     def ensure_no_literals(self):
         if self.part_idx != len(self.parts) - 1:
-            raise ParseError(self.parts, 'unexpected literal token')
+            self.error('unexpected literal token')
 
     def ensure_eom(self):
+        if not self.is_at_eom():
+            self.error('expected end of message')
+
+    def is_at_eom(self):
         if not self.is_at_end_of_part():
-            raise ParseError('expected end of message')
+            return False
         if self.part_idx != len(self.parts) - 1:
-            raise ParseError('expected end of message')
+            return False
+        return True
 
     def is_at_end_of_part(self):
         return self.char_idx == len(self.parts[self.part_idx])
 
     def peek_char(self):
         if self.is_at_end_of_part():
-            raise ParseError('unexpected end of command')
+            self.error('unexpected end of command')
         return self.parts[self.part_idx][self.char_idx:self.char_idx + 1]
 
     def get_char(self):
@@ -185,8 +219,7 @@ class ResponseParser:
         end = self.char_idx + len(expected)
         actual = buf[self.char_idx:end]
         if actual != expected:
-            raise ParseError('expected %r, but found %r' %
-                             (expected, actual))
+            self.error('expected %r, but found %r', expected, actual)
 
         self.char_idx = end
 
@@ -221,7 +254,7 @@ class ResponseParser:
                 self.part_idx += 1
                 self.char_idx = 0
                 return literal
-            raise ParseError('expected astring, but found end of message')
+            self.error('expected astring, but found end of message')
 
         # Check for a quoted string
         char = self.peek_char()
@@ -256,8 +289,7 @@ class ResponseParser:
                      b'TRYCREATE', b'UIDNOTSTICKY'):
             # These codes aren't allowed to be followed by any data
             if self.peek_char() != b']':
-                raise ParseError('unexpected data after %s response code',
-                                 token)
+                self.error('unexpected data after %s response code', token)
             code = ResponseCode(token)
         elif token == b'BADCHARSET':
             code = self.parse_badcharset_code()
@@ -271,8 +303,8 @@ class ResponseParser:
             try:
                 number = int(data)
             except ValueError:
-                raise ParseError('expected number after %s response code, '
-                                 'found %r', token, data)
+                self.error('expected number after %s response code, found %r',
+                           token, data)
             code = ResponseCode(token, number)
         else:
             # TODO: APPENDUID
