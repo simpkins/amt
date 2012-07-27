@@ -386,6 +386,18 @@ class Connection(ConnectionCore):
 
         return list_handler.responses
 
+    def status(self, mailbox, attributes):
+        if mailbox.upper() == b'INBOX':
+            mailbox_arg = b'INBOX'
+        else:
+            mailbox_arg = self.to_astring(mailbox)
+        attr_arg = b'(' + b' '.join(attributes) + b')'
+
+        with self.untagged_handler('STATUS') as status_handler:
+            self.run_cmd(b'STATUS', mailbox_arg, attr_arg)
+
+        return status_handler.get_exactly_one()
+
     def fetch(self, msg_ids, attributes):
         msg_ids_arg = self._format_sequence_set(msg_ids)
 

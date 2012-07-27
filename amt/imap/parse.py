@@ -89,6 +89,13 @@ class ListResponse(Response):
         self.delimiter = delimiter
 
 
+class StatusResponse(Response):
+    def __init__(self, tag, mailbox, attributes):
+        super().__init__(tag, b'STATUS')
+        self.mailbox = mailbox
+        self.attributes = attributes
+
+
 class NumericResponse(Response):
     def __init__(self, tag, number, resp_type):
         super().__init__(tag, resp_type)
@@ -150,9 +157,10 @@ class ResponseParser:
             return self.parse_search_response()
         elif self.resp_type == b'LIST':
             return self.parse_list_response()
+        elif self.resp_type == b'STATUS':
+            return self.parse_status_response()
 
         #b'LSUB': UnknownResponseParser,  # TODO
-        #b'STATUS': UnknownResponseParser,  # TODO
 
         return UnknownResponse(self.tag, self.resp_type, self.parts)
 
@@ -266,9 +274,33 @@ class ResponseParser:
             delimiter = self.read_quoted_string()
 
         self.advance_over(b' ')
-        name = self.read_astring()
-        return ListResponse(self.tag, mailbox=name, attributes=attributes,
+        mailbox = self.read_astring()
+        self.ensure_eom()
+        return ListResponse(self.tag, mailbox=mailbox, attributes=attributes,
                             delimiter=delimiter)
+
+    def parse_status_response(self):
+        self.advance_over(b' ')
+        mailbox = self.read_astring()
+        self.advance_over(b' (')
+
+        attributes = {}
+        if not self.advance_if(b')'):
+            while True:
+                att_name = self.read_until(b' ')
+                self.advance_over(b' ')
+                num = self.read_number()
+                attributes[att_name] = num
+                if not self.advance_if(b' '):
+                    break
+            self.advance_over(b')')
+
+        # MS Exchange servers seem to include a trailing space here,
+        # even though it doesn't seem to be allowed by the RFC 3501 grammar.
+        self.advance_if(b' ')
+
+        self.ensure_eom()
+        return StatusResponse(self.tag, mailbox, attributes)
 
     def ensure_no_literals(self):
         if self.part_idx != len(self.parts) - 1:
