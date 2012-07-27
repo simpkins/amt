@@ -81,6 +81,14 @@ class SearchResponse(Response):
         self.msg_numbers = msg_numbers
 
 
+class ListResponse(Response):
+    def __init__(self, tag, mailbox, attributes, delimiter):
+        super().__init__(tag, b'LIST')
+        self.mailbox = mailbox
+        self.attributes = attributes
+        self.delimiter = delimiter
+
+
 class NumericResponse(Response):
     def __init__(self, tag, number, resp_type):
         super().__init__(tag, resp_type)
@@ -140,8 +148,9 @@ class ResponseParser:
             return self.parse_flags_response()
         elif self.resp_type == b'SEARCH':
             return self.parse_search_response()
+        elif self.resp_type == b'LIST':
+            return self.parse_list_response()
 
-        #b'LIST': UnknownResponseParser,  # TODO
         #b'LSUB': UnknownResponseParser,  # TODO
         #b'STATUS': UnknownResponseParser,  # TODO
 
@@ -244,6 +253,22 @@ class ResponseParser:
             msg_nums.append(num)
 
         return SearchResponse(self.tag, msg_nums)
+
+    def parse_list_response(self):
+        self.advance_over(b' (')
+        attr_str = self.read_until(b')')
+        attributes = attr_str.split(b' ')
+        self.advance_over(b') ')
+
+        if self.advance_if(b'NIL'):
+            delimiter = None
+        else:
+            delimiter = self.read_quoted_string()
+
+        self.advance_over(b' ')
+        name = self.read_astring()
+        return ListResponse(self.tag, mailbox=name, attributes=attributes,
+                            delimiter=delimiter)
 
     def ensure_no_literals(self):
         if self.part_idx != len(self.parts) - 1:

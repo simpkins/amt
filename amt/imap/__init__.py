@@ -245,11 +245,14 @@ class ConnectionCore:
         self._response_code_handlers.unregister(token, handler)
 
     def to_astring(self, value):
+        # TODO: We could just return the value itself if it doesn't contain
+        # any atom-specials.
+        return self.to_string(value)
+
+    def to_string(self, value):
         if len(value) > 256:
             return to_literal(value)
 
-        # TODO: We could just return the value itself if it doesn't contain
-        # any atom-specials.
         return self.to_quoted(value)
 
     def to_literal(self, value):
@@ -370,6 +373,18 @@ class Connection(ConnectionCore):
             search_response = search_handler.get_exactly_one()
 
         return search_response.msg_numbers
+
+    def list(self, name, reference=None):
+        if reference is None:
+            reference_arg = b'""'
+        else:
+            reference_arg = self.to_astring(reference)
+        name_arg = self.to_astring(name)
+
+        with self.untagged_handler('LIST') as list_handler:
+            self.run_cmd(b'LIST', reference_arg, name_arg)
+
+        return list_handler.responses
 
     def fetch(self, msg_ids, attributes):
         msg_ids_arg = self._format_sequence_set(msg_ids)
