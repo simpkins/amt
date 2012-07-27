@@ -7,6 +7,7 @@ import random
 import socket
 
 from .. import ssl_util
+from .. import message
 
 from .err import ImapError, ParseError
 from .cmd_splitter import CommandSplitter
@@ -14,6 +15,13 @@ from .parse import *
 
 IMAP_PORT = 143
 IMAPS_PORT = 993
+
+FLAG_SEEN = r'\Seen'
+FLAG_ANSWERED = r'\Answered'
+FLAG_FLAGGED = r'\Flagged'
+FLAG_DELETED = r'\Deleted'
+FLAG_DRAFT =  r'\Draft'
+FLAG_RECENT =  r'\Recent'
 
 STATE_NOT_AUTHENTICATED = 'not auth'
 STATE_AUTHENTICATED = 'auth'
@@ -398,8 +406,14 @@ class Connection(ConnectionCore):
             raise ImapError('unexpected state after %s command', cmd)
 
     def search(self, criteria):
+        return self._run_search(b'SEARCH', criteria)
+
+    def uid_search(self, criteria):
+        return self._run_search(b'UID SEARCH', criteria)
+
+    def _run_search(self, cmd, criteria):
         with self.untagged_handler('SEARCH') as search_handler:
-            self.run_cmd(b'SEARCH', criteria)
+            self.run_cmd(cmd, criteria)
             search_response = search_handler.get_exactly_one()
 
         return search_response.msg_numbers
@@ -435,6 +449,35 @@ class Connection(ConnectionCore):
         return status_handler.get_exactly_one()
 
     def fetch(self, msg_ids, attributes):
+        responses = self._run_fetch(b'FETCH', msg_ids, attributes)
+
+        return dict((resp.number, resp.attributes) for resp in resposes)
+
+    def fetch_one(self, msg_id, attributes):
+        assert not isinstance(msg_id, (list, tuple))
+        responses = self._run_fetch(b'FETCH', msg_id, attributes)
+        assert len(responses) == 1
+        return responses[0].attributes
+
+    def uid_fetch(self, msg_ids, attributes, index_by_uid=True):
+        responses = self._run_fetch(b'UID FETCH', msg_ids, attributes)
+
+        if index_by_uid:
+            # RFC 3501 says that the server must implicitly include the UID
+            # attribute in the response even if it wasn't explicitly included
+            # in the request
+            return dict((resp.attributes[b'UID'], resp.attributes)
+                        for resp in resposes)
+        else:
+            return dict((resp.number, resp.attributes) for resp in resposes)
+
+    def uid_fetch_one(self, msg_id, attributes):
+        assert not isinstance(msg_id, (list, tuple))
+        responses = self._run_fetch(b'UID FETCH', msg_id, attributes)
+        assert len(responses) == 1
+        return responses[0].attributes
+
+    def _run_fetch(self, cmd, msg_ids, attributes):
         msg_ids_arg = self._format_sequence_set(msg_ids)
 
         if isinstance(attributes, (list, tuple)):
@@ -453,15 +496,19 @@ class Connection(ConnectionCore):
 
         # Send the request and get the responses
         with self.untagged_handler('FETCH') as fetch_handler:
-            self.run_cmd(b'FETCH', msg_ids_arg, attributes_arg)
+            self.run_cmd(cmd, msg_ids_arg, attributes_arg)
 
-        # Turn the responses in to a dictionary mapping
-        # the message number to the message attributes
-        response_dict = {}
-        for resp in fetch_handler.responses:
-            response_dict[resp.number] = resp.attributes
+        return fetch_handler.responses
 
-        return response_dict
+    def fetch_msg(self, msg_id):
+        desired_attrs = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
+        attrs = self.fetch_one(msg_id, desired_attrs)
+        return fetch_response_to_msg(attrs)
+
+    def uid_fetch_msg(self, msg_id):
+        desired_attrs = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
+        attrs = self.uid_fetch_one(msg_id, desired_attrs)
+        return fetch_response_to_msg(attrs)
 
 
 class ResponseHandlerCtx:
@@ -487,3 +534,32 @@ class ResponseHandlerCtx:
             raise ImapError('received %d %s responses, expected only 1',
                             len(self.responses), self.resp_type)
         return self.responses[0]
+
+
+def fetch_response_to_msg(response):
+    '''
+    Create a new Message from an IMAP FETCH response that includes at
+    least BODY[], INTERNALDATE, and FLAGS fields.
+    '''
+    body = response[b'BODY[]']
+    timestamp = response[b'INTERNALDATE']
+    imap_flags = response[b'FLAGS']
+
+    flags = set()
+    custom_flags = set()
+    for flag in imap_flags:
+        if flag == FLAG_SEEN:
+            flags.add(message.Message.FLAG_SEEN)
+        elif flag == FLAG_ANSWERED:
+            flags.add(message.Message.FLAG_REPLIED_TO)
+        elif flag == FLAG_FLAGGED:
+            flags.add(message.Message.FLAG_FLAGGED)
+        elif flag == FLAG_DELETED:
+            flags.add(message.Message.FLAG_DELETED)
+        elif flag == FLAG_DRAFT:
+            flags.add(message.Message.FLAG_DRAFT)
+        else:
+            custom_flags.add(flag)
+
+    return message.Message.from_bytes(body, timestamp=timestamp, flags=flags,
+                                      custom_flags=custom_flags)
