@@ -375,14 +375,20 @@ class Connection(ConnectionCore):
         return search_response.msg_numbers
 
     def list(self, name, reference=None):
+        return self._run_mailbox_list_cmd(b'LIST', name, reference)
+
+    def lsub(self, name, reference=None):
+        return self._run_mailbox_list_cmd(b'LSUB', name, reference)
+
+    def _run_mailbox_list_cmd(self, cmd, name, reference):
         if reference is None:
             reference_arg = b'""'
         else:
             reference_arg = self.to_astring(reference)
         name_arg = self.to_astring(name)
 
-        with self.untagged_handler('LIST') as list_handler:
-            self.run_cmd(b'LIST', reference_arg, name_arg)
+        with self.untagged_handler(cmd) as list_handler:
+            self.run_cmd(cmd, reference_arg, name_arg)
 
         return list_handler.responses
 

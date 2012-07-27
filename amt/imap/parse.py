@@ -89,6 +89,14 @@ class ListResponse(Response):
         self.delimiter = delimiter
 
 
+class LsubResponse(Response):
+    def __init__(self, tag, mailbox, attributes, delimiter):
+        super().__init__(tag, b'LSUB')
+        self.mailbox = mailbox
+        self.attributes = attributes
+        self.delimiter = delimiter
+
+
 class StatusResponse(Response):
     def __init__(self, tag, mailbox, attributes):
         super().__init__(tag, b'STATUS')
@@ -157,10 +165,10 @@ class ResponseParser:
             return self.parse_search_response()
         elif self.resp_type == b'LIST':
             return self.parse_list_response()
+        elif self.resp_type == b'LSUB':
+            return self.parse_lsub_response()
         elif self.resp_type == b'STATUS':
             return self.parse_status_response()
-
-        #b'LSUB': UnknownResponseParser,  # TODO
 
         return UnknownResponse(self.tag, self.resp_type, self.parts)
 
@@ -263,6 +271,12 @@ class ResponseParser:
         return SearchResponse(self.tag, msg_nums)
 
     def parse_list_response(self):
+        return self._parse_list_or_lsub_response(ListResponse)
+
+    def parse_lsub_response(self):
+        return self._parse_list_or_lsub_response(LsubResponse)
+
+    def _parse_list_or_lsub_response(self, response_class):
         self.advance_over(b' (')
         attr_str = self.read_until(b')')
         attributes = attr_str.split(b' ')
@@ -276,8 +290,8 @@ class ResponseParser:
         self.advance_over(b' ')
         mailbox = self.read_astring()
         self.ensure_eom()
-        return ListResponse(self.tag, mailbox=mailbox, attributes=attributes,
-                            delimiter=delimiter)
+        return response_class(self.tag, mailbox=mailbox, attributes=attributes,
+                              delimiter=delimiter)
 
     def parse_status_response(self):
         self.advance_over(b' ')
