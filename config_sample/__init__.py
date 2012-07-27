@@ -5,3 +5,9 @@
 
 from .classifier import MailClassifier
 from .fetchmail import FetchmailConfig
+
+from amt.config import Account
+
+account = Account(server='imap.example.com',
+                  user='johndoe',
+                  protocol='imaps')
