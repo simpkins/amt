@@ -365,15 +365,64 @@ class Connection(ConnectionCore):
             raise ImapError('unexpected state after %s command', cmd)
 
     def search(self, criteria):
-        responses = []
-        def on_search_response(resp):
-            responses.append(resp)
-
         with self.untagged_handler('SEARCH') as search_handler:
             self.run_cmd(b'SEARCH', criteria)
             search_response = search_handler.get_exactly_one()
 
         return search_response.msg_numbers
+
+    def fetch(self, msg_ids, attributes):
+        msg_ids_arg = self._format_sequence_set(msg_ids)
+
+        if isinstance(attributes, (list, tuple)):
+            atts = []
+            for att in attributes:
+                if isinstance(att, str):
+                    att = att.encode('ASCII', errors='strict')
+                elif not isinstance(attributes, (bytes, bytearray)):
+                    raise TypeError('expected string or bytes')
+                atts.append(att)
+            attributes_arg = b'(' + b' '.join(atts) + b')'
+        elif isinstance(attributes, str):
+            attributes_arg = attributes.encode('ASCII', errors='strict')
+        elif isinstance(attributes, (bytes, bytearray)):
+            attributes_arg = attributes
+
+        # Send the request and get the responses
+        with self.untagged_handler('FETCH') as fetch_handler:
+            self.run_cmd(b'FETCH', msg_ids_arg, attributes_arg)
+
+        # Turn the responses in to a dictionary mapping
+        # the message number to the message attributes
+        response_dict = {}
+        for resp in fetch_handler.responses:
+            response_dict[resp.number] = resp.attributes
+
+        return response_dict
+
+    def _format_sequence_set(self, msg_ids):
+        if isinstance(msg_ids, (list, tuple)):
+            return b','.join(self._format_seq_range(r) for r in msg_ids)
+
+        try:
+            return self._format_seq_range(msg_ids)
+        except TypeError:
+            raise TypeError('expected a numeric message ID, '
+                            'a string message range, or list of message '
+                            'IDs/ranges, got %s: %r' %
+                            (type(value).__name__, value))
+
+    def _format_seq_range(self, value):
+        if isinstance(value, int):
+            return str(value).encode('ASCII', errors='strict')
+        elif isinstance(value, str):
+            return value.encode('ASCII', errors='strict')
+        elif isinstance(value, (bytes, bytearray)):
+            return value
+
+        raise TypeError('expected a numeric message ID or a string '
+                        'message range, got %s: %r' %
+                        (type(value).__name__, value))
 
     def untagged_handler(self, resp_type):
         return ResponseHandlerCtx(self, resp_type)
