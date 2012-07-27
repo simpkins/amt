@@ -22,3 +22,7 @@ class ParseError(ImapError):
 
     def __str__(self):
         return 'IMAP parse error: %s: %r' % (self.msg, self.cmd_parts)
+
+
+class TimeoutError(ImapError):
+    pass

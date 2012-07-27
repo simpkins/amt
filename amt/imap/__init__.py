@@ -6,7 +6,7 @@ import logging
 
 from .. import message
 
-from .err import ImapError
+from .err import ImapError, TimeoutError
 from .conn_core import ConnectionCore
 from .constants import IMAP_PORT, IMAPS_PORT
 
@@ -296,6 +296,31 @@ class Connection(ConnectionCore):
         desired_attrs = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
         attrs = self.uid_fetch_one(msg_id, desired_attrs)
         return fetch_response_to_msg(attrs)
+
+    def noop(self):
+        self.run_cmd(b'NOOP')
+
+    def idle(self, timeout=29*60):
+        if b'IDLE' not in self.get_capabilities():
+            raise ImapError('server does not support the IDLE extension')
+
+        try:
+            self._idling = True
+            tag = self.send_request(b'IDLE')
+            self.wait_for_continuation_response()
+            try:
+                self.wait_for_response(tag, timeout=timeout)
+            except TimeoutError:
+                self.send_line(b'DONE')
+                self.wait_for_response(tag)
+        finally:
+            self._idling = False
+
+    def stop_idle(self):
+        if not self._idling:
+            raise ImapError('attempted to stop IDLE when no IDLE command '
+                            'in progress')
+        self.send_line(b'DONE')
 
 
 def fetch_response_to_msg(response):
