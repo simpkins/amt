@@ -244,6 +244,12 @@ class ConnectionCore:
     def unregister_code_handler(self, token, handler):
         self._response_code_handlers.unregister(token, handler)
 
+    def untagged_handler(self, resp_type):
+        return ResponseHandlerCtx(self, resp_type)
+
+    # TODO: Move the following functions to some encoding module
+    # They don't really belong as part of the ConnectionCore class.
+
     def to_astring(self, value):
         # TODO: We could just return the value itself if it doesn't contain
         # any atom-specials.
@@ -262,6 +268,30 @@ class ConnectionCore:
     def to_quoted(self, value):
         escaped = value.replace(b'\\', b'\\\\').replace(b'"', b'\\"')
         return b'"' + escaped + b'"'
+
+    def _format_sequence_set(self, msg_ids):
+        if isinstance(msg_ids, (list, tuple)):
+            return b','.join(self._format_seq_range(r) for r in msg_ids)
+
+        try:
+            return self._format_seq_range(msg_ids)
+        except TypeError:
+            raise TypeError('expected a numeric message ID, '
+                            'a string message range, or list of message '
+                            'IDs/ranges, got %s: %r' %
+                            (type(value).__name__, value))
+
+    def _format_seq_range(self, value):
+        if isinstance(value, int):
+            return str(value).encode('ASCII', errors='strict')
+        elif isinstance(value, str):
+            return value.encode('ASCII', errors='strict')
+        elif isinstance(value, (bytes, bytearray)):
+            return value
+
+        raise TypeError('expected a numeric message ID or a string '
+                        'message range, got %s: %r' %
+                        (type(value).__name__, value))
 
 
 class Connection(ConnectionCore):
@@ -432,33 +462,6 @@ class Connection(ConnectionCore):
             response_dict[resp.number] = resp.attributes
 
         return response_dict
-
-    def _format_sequence_set(self, msg_ids):
-        if isinstance(msg_ids, (list, tuple)):
-            return b','.join(self._format_seq_range(r) for r in msg_ids)
-
-        try:
-            return self._format_seq_range(msg_ids)
-        except TypeError:
-            raise TypeError('expected a numeric message ID, '
-                            'a string message range, or list of message '
-                            'IDs/ranges, got %s: %r' %
-                            (type(value).__name__, value))
-
-    def _format_seq_range(self, value):
-        if isinstance(value, int):
-            return str(value).encode('ASCII', errors='strict')
-        elif isinstance(value, str):
-            return value.encode('ASCII', errors='strict')
-        elif isinstance(value, (bytes, bytearray)):
-            return value
-
-        raise TypeError('expected a numeric message ID or a string '
-                        'message range, got %s: %r' %
-                        (type(value).__name__, value))
-
-    def untagged_handler(self, resp_type):
-        return ResponseHandlerCtx(self, resp_type)
 
 
 class ResponseHandlerCtx:
