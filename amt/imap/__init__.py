@@ -3,6 +3,7 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 import logging
+import time
 
 from .. import message
 
@@ -301,6 +302,14 @@ class Connection(ConnectionCore):
         self.run_cmd(b'NOOP')
 
     def idle(self, timeout=29*60):
+        '''
+        Send an IDLE command, and wait until the specified timeout expires,
+        or until stop_idle() is called.
+
+        If stop_idle() is not called before the timeout expires,
+        idle() stops idling and returns normally.  It does not raise a
+        TimeoutError.
+        '''
         if b'IDLE' not in self.get_capabilities():
             raise ImapError('server does not support the IDLE extension')
 
@@ -321,6 +330,77 @@ class Connection(ConnectionCore):
             raise ImapError('attempted to stop IDLE when no IDLE command '
                             'in progress')
         self.send_line(b'DONE')
+
+    def wait_for_exists(self, timeout=None, poll_interval=30):
+        '''
+        Wait until we see a new EXISTS message from the server.
+
+        This will wait using the IDLE command if the server supports the IDLE
+        extension, otherwise it will poll using NOOP.
+
+        Once an EXISTS response has been seen, wait_for_exists() will return.
+        self.mailbox.num_messages will contain an accurate count of the number
+        of messages currently in the mailbox.
+
+        Note that there will not necessarily be any new messages after
+        wait_for_exists() returns, and num_messages may even be 0.  An EXPUNGE
+        response may have also been seen after the EXISTS response, but before
+        wait_for_exists() returns.  Additionally, some servers (such as
+        MS Exchange) send an unnecessary EXISTS response after every EXPUNGE,
+        which will also trigger wait_for_exists() to return.
+        '''
+        if b'IDLE' not in self.get_capabilities():
+            self.poll_for_new_message(timeout=timeout,
+                                      poll_interval=poll_interval)
+            return
+
+        # TODO: This timeout argument doesn't behave like the timeout argument
+        # for most other Connection methods.  Here, a timeout of None really
+        # means no timeout, rather than use the default timeout.
+        if timeout is None:
+            end_time = None
+        else:
+            end_time = time.time() + timeout
+
+        seen_exists = False
+        def on_exists(response):
+            nonlocal seen_exists
+            if not seen_exists:
+                self.stop_idle()
+            seen_exists = True
+
+        with self.untagged_handler('EXISTS', on_exists):
+            while not seen_exists:
+                if end_time is not None:
+                    time_left = time.time() - end_time
+                    if time_left < 0:
+                        raise TimeoutError('timed out waiting for new message')
+                self.idle()
+
+    def poll_for_exists(self, timeout=None, poll_interval=30):
+        # TODO: This timeout argument doesn't behave like the timeout argument
+        # for most other Connection methods.  Here, a timeout of None really
+        # means no timeout, rather than use the default timeout.
+        if timeout is None:
+            end_time = None
+        else:
+            end_time = time.time() + timeout
+
+        with self.untagged_handler('EXISTS') as exists_handler:
+            while True:
+                self.noop()
+                if exists_handler.responses:
+                    return
+
+                if end_time is None:
+                    poll_time = poll_interval
+                else:
+                    time_left = time.time() - end_time
+                    if time_left < 0:
+                        raise TimeoutError('timed out waiting for new message')
+                    poll_time = min(poll_interval, time_left)
+
+                time.sleep(poll_time)
 
 
 def fetch_response_to_msg(response):
