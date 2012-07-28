@@ -4,18 +4,18 @@
 #
 import logging
 
-from . import imap_util
+from . import imap
 from .getpassword import get_password
 from .message import Message
 
 
 class MailboxConfig:
     def __init__(self):
-        self.port = imap_util.IMAP4_SSL_PORT
+        self.port = imap.IMAPS_PORT
         self.password = None  # Must call prepare_password() to set
 
     def init(self):
-        self.prepare_password()
+        self.account.prepare_password()
 
     def init_post_imap(self, conn):
         pass
@@ -87,3 +87,68 @@ class MailProcessor:
             self.conn.expunge()
         else:
             logging.info('No messages to process')
+
+
+class ProcessorBase:
+    def __init__(self, config):
+        self.config = config
+        self.config.init()
+
+    def run(self):
+        self.setup_conn()
+        self.run_impl()
+
+    def setup_conn(self):
+        account = self.config.account
+        self.conn = imap.Connection(account.server, account.port)
+        self.conn.login(account.user, account.password)
+        self.conn.select_mailbox(self.config.mailbox)
+
+    def debug(self, msg, *args):
+        logging.debug(msg, *args)
+
+
+class SimpleProcessor(ProcessorBase):
+    '''
+    SimpleProcessor processes every message in the mailbox,
+    and assumes that processing always deletes the message from the mailbox.
+    '''
+    def run_impl(self):
+        while True:
+            self.process_mb()
+
+    def process_mb(self):
+        mb = self.conn.mailbox
+
+        while mb.num_messages == 0:
+            # Wait for new messages to arrive
+            self.conn.wait_for_exists()
+
+        # Process all messages in the mailbox
+        self.debug('Processing %d messages' % mb.num_messages)
+        while mb.num_messages > 0:
+            self.process_msg()
+
+    def process_msg(self):
+        # Fetch the first message
+        msg, uid = self.conn.fetch_msg(1)
+
+        # Compute the tags which should be applied to this message
+        tags = self.compute_tags(msg)
+
+        # Copy the message to the backup mailbox
+        if self.backup_mailbox is not None:
+            self.conn.uid_copy(uid, self.backup_mailbox)
+
+        # Modify our in-memory message to include the desired tags
+        self.apply_tags(msg, tags)
+
+        # Deliver the message to the desired mailboxes
+        TODO
+
+        # Delete the message from this mailbox
+        TODO
+        # Given that we currently always fetch sequence ID 1,
+        # we need to expunge the mailbox now, too.
+        # It might be nicer to wait to expunge until we have finished one full
+        # loop and processed all of the messages in the mailbox.

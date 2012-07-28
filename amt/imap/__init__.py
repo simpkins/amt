@@ -349,6 +349,10 @@ class Connection(ConnectionCore):
         MS Exchange) send an unnecessary EXISTS response after every EXPUNGE,
         which will also trigger wait_for_exists() to return.
         '''
+        # TODO: It would be nice to ignore EXISTS responses if the response
+        # already matches the current number of messages.  This would allow us
+        # to ignore the extraneous EXISTS responses from MS Exchange, without
+        # waking up from the IDLE call.
         if b'IDLE' not in self.get_capabilities():
             self.poll_for_new_message(timeout=timeout,
                                       poll_interval=poll_interval)

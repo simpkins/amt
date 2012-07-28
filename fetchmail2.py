@@ -27,7 +27,7 @@ def main():
 
     config = amt.config.load_config(args.config_path)
     fetchmail_config = config.FetchmailConfig()
-    processor = amt.fetchmail.MailProcessor(fetchmail_config)
+    processor = amt.fetchmail.SimpleProcessor(fetchmail_config)
     processor.run()
 
 
