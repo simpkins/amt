@@ -4,8 +4,10 @@
 #
 import datetime
 import email.header
+import email.message
 import email.parser
 import email.utils
+import re
 import time
 
 
@@ -263,6 +265,67 @@ class Message:
             hdr.append(part, charset, errors=errors)
         return hdr
 
+    def get_message_id(self):
+        '''
+        Returns the contents of the Message-ID header, if it looks like a valid
+        Message-ID.  If no Message-ID header is present, or if it is invalid,
+        None is returned.
+        '''
+        message_id = self.get('Message-ID')
+        if message_id is None:
+            return None
+
+        message_id = message_id.strip()
+        if _is_valid_message_id(message_id):
+            return message_id
+        return None
+
+    def get_referenced_ids(self):
+        '''
+        Get the set of Message-IDs contained in the References and In-Reply-To
+        header.
+
+        This parses the References and In-Reply-To headers, and only returns
+        the valid Message-IDs that are found.  The returned list will not
+        contain duplicates (if the same Message-ID is present in both the
+        References and In-Reply-To header, for example).
+        '''
+        results = []
+
+        # For some useful info about the References and In-Reply-To headers
+        # in practice, see http://www.jwz.org/doc/threading.html
+        for references in self.get_all('References', []):
+            parts = references.split()
+            for part in parts:
+                if _is_valid_message_id(part):
+                    results.append(part)
+
+        global _message_id_regex
+        for header in self.get_all('In-Reply-To', []):
+            # Search for something that looks like <ID@HOST>
+            m = _message_id_regex.search(header)
+            if not m:
+                continue
+            results.append(m.group(1))
+
+        return results
+
+    def get_subject_stem(self):
+        '''
+        Get the subject, with any "Re:", "Fwd:", and similar prefixes stripped
+        off.
+        '''
+        subj = self.subject.strip()
+
+        prefixes = ['re:', 'fwd:', 'fw:']
+        while True:
+            for prefix in prefixes:
+                if subj.lower().startswith(prefix):
+                    subj = subj[len(prefix):].lstrip()
+                    break
+            else:
+                return subj
+
     def _parse_addresses(self, header):
         return email.utils.getaddresses([header])
 
@@ -431,3 +494,47 @@ def decode_payload(msg, errors='replace'):
             # Keep looking; use the last charset parameter we find
 
     return payload.decode(charset, errors=errors)
+
+
+def _format_address(value):
+    if not isinstance(value, (list, tuple)):
+        raise TypeError('argument must be a (name, address) tuple, '
+                        'or a list of such tuples, not %s' %
+                        type(value).__name__)
+
+    # Accept a single (name, value) pair, and turn it into a list
+    if isinstance(value[0], str):
+        value = [value]
+
+    formatted = []
+    for name, addr in value:
+        result = email.utils.formataddr((name, addr))
+        formatted.append(result)
+    return ' '.join(formatted)
+
+
+_message_id_regex = re.compile('(<[^ @>]+@[^ @>]+>)')
+
+def _is_valid_message_id(value):
+    # We could verify that the ID contents are actually RFC2822 compliant,
+    # but we don't bother for now.
+    return (value.startswith('<') and value.endswith('>'))
+
+
+def new_message(subject, body, from_addr, to, cc=None,
+                message_id=None, timestamp=None):
+    msg = email.message.Message()
+    msg['Subject'] = subject
+    msg['From'] = _format_address(from_addr)
+    msg['To'] = _format_address(to)
+    if cc is not None:
+        msg['Cc'] = _format_address(cc)
+    msg.set_payload(body, 'utf-8')
+
+    if message_id is None:
+        message_id = email.utils.make_msgid()
+    msg['Message-ID'] = message_id
+
+    if timestamp is None:
+        timestamp = time.time()
+    return Message(msg, timestamp, flags=[], custom_flags=[])

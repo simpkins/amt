@@ -25,14 +25,15 @@ class MailDB:
     MUIDs to the physical Locations containing the message contents.  All other
     indices in the database then just refer to messages by MUID.
     '''
-    def __init__(self, path):
+    @classmethod
+    def open_db(cls, path):
         '''
-        Create a MailDB object to access the database at the specified path.
+        Returns a MailDB object to access the database at the specified path.
 
         The database must already exist at the specified path.  Use the
         create_db() classmethod to create a brand new MailDB.
         '''
-        pass
+        raise NotImplementedError()
 
     @classmethod
     def create_db(cls, path):
@@ -51,7 +52,19 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def get_muid(self, msg, update_header=True):
+    def commit(self):
+        '''
+        Commit the database changes to disk.
+
+        Most functions that modify the database will automatically commit the
+        changes to disk.  However, if an explicit commit=False keyword argument
+        is supplied to any modifying function, it will skip committing the
+        changes to disk.  In this case, commit() must be manually called later
+        to commit the changes.
+        '''
+        raise NotImplementedError()
+
+    def get_muid(self, msg, update_header=True, dup_check=True, commit=True):
         '''
         Get an MUID for a message.
 
@@ -59,45 +72,47 @@ class MailDB:
         is read from this header and returned.  Otherwise a new MUID is
         allocated.
 
+        If dup_check is True, the database will look at the message contents
+        and search the DB to see if an existing MUID already exists for this
+        message.  If dup_check is False this search will be skipped, which may
+        improve performance.
+
         If a new MUID is allocated and the update_header parameter is True, an
         X-AMT-MUID header containing the new MUID is added to the message.
-        '''
-        muid_hdr = msg.get(MUID_HEADER)
-        if muid_hdr is not None:
-            return MUID(muid_hdr)
 
-        muid = self.allocate_muid()
-        if update_header:
-            msg.add_header(muid.value)
-
-        return muid
-
-    def allocate_muid(self):
-        '''
-        Allocate a new MUID.
+        Typically you want to use import_msg() rather than calling get_muid()
+        directly.
         '''
         raise NotImplementedError()
 
-    def import_msg(self, msg, update_header=True, reindex=False):
+    def import_msg(self, msg, update_header=True, reindex=False,
+                   dup_check=True, commit=True):
         '''
-        Get an MUID for a message, and index the message contents.
+        Get an MUID and TUID for a message, and index the message contents.
 
-        This is essentially a helper function that combines get_muid() and
-        index_msg().  The caller must still call add_location() to add a
-        Location for the message.
+        This is essentially a helper function that combines get_muid(),
+        get_tuid(), and index_msg().  The caller must still call add_location()
+        to add a Location for the message.
+
+        Returns a (muid, tuid) tuple
         '''
-        muid = self.get_muid(msg, update_header=update_header)
+        muid = self.get_muid(msg, update_header=update_header,
+                             dup_check=dup_check, commit=False)
+        tuid = self.get_tuid(muid, msg, update_header=update_header,
+                             commit=False)
+        if commit:
+            self.commit()
         self.index_msg(muid, msg, reindex=reindex)
-        return muid
+        return muid, tuid
 
-    def add_location(self, muid, location):
+    def add_location(self, muid, location, commit=True):
         '''
         Indicate that the specified message is also stored at the specified
         location.
         '''
         raise NotImplementedError()
 
-    def remove_location(self, muid, location):
+    def remove_location(self, muid, location, commit=True):
         '''
         Indicate that the specified message is no longer stored at the
         specified location.
@@ -130,21 +145,54 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def add_label(self, muid, label):
+    def add_label(self, muid, label, automatic=False, commit=True):
         '''
         Add a new label for the specified message.
+
+        The automatic parameter specifies if this was an automatically computed
+        or one manually specified by the user.
+        '''
+        self.add_labels(muid, [(label, automatic)], commit=commit)
+
+    def add_labels(self, muid, labels, automatic=False, commit=True):
+        '''
+        Add new labels for the specified message.
+
+        Each entry in the labels parameter can be either a plain string, or a
+        (label, automatic) tuple, where the second entry of the tuple is a
+        boolean indicating if the label was automatically computed or manually
+        specified.
+
+        For label entries that are just plain strings, they will take their
+        automatic setting from the automatic parameter.
         '''
         raise NotImplementedError()
 
-    def add_labels(self, muid, labels):
+    def remove_label(self, muid, label, commit=True):
         '''
-        Add new labels for the specified message.
+        Remove a label from the specified message.
+        '''
+        self.remove_labels(muid, [label], commit=commit)
+
+    def remove_labels(self, muid, labels, commit=True):
+        '''
+        Add labels from the specified message.
         '''
         raise NotImplementedError()
 
     def get_labels(self, muid):
         '''
         Get the labels for the specified message.
+
+        Returns a list of labels (as strings).
+        '''
+        return [label for label, automatic in self.get_label_details(muid)]
+
+    def get_label_details(self, muid):
+        '''
+        Get the labels for the specified message.
+
+        Returns a list of (label, automatic) tuples.
         '''
         raise NotImplementedError()
 
@@ -165,7 +213,9 @@ class MailDB:
 
         Returns a list of MUIDs.
 
-        TBD: Define the query language.
+        The query language syntax isn't currently specified as part of the
+        MailDB interface.  The query language syntax is currently
+        implementation-specific.
         '''
         raise NotImplementedError()
 
@@ -177,7 +227,7 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def get_tuid(self, muid, msg, update_header=True):
+    def get_tuid(self, muid, msg, update_header=True, commit=True):
         '''
         Get the TUID for a message.
 
@@ -325,6 +375,15 @@ class MUID:
     def __repr__(self):
         return 'MUID(%r)' % (self.value,)
 
+    def __eq__(self, other):
+        return isinstance(other, MUID) and self.value == other.value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.value)
+
 
 class TUID:
     '''
@@ -345,3 +404,12 @@ class TUID:
 
     def __repr__(self):
         return 'TUID(%r)' % (self.value,)
+
+    def __eq__(self, other):
+        return isinstance(other, TUID) and self.value == other.value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.value)
