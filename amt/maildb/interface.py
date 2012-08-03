@@ -245,23 +245,31 @@ class MailDB:
 
         Note that an existing X-AMT-TUID header may be replaced in cases where
         the MailDB contains a newer TUID for this message (in cases where
-        threads have been joined or split since the original X-AMT-TUID header
+        threads have been merged or split since the original X-AMT-TUID header
         was stored).
         '''
         raise NotImplementedError()
 
-    def join_threads(self, tuids):
+    def merge_threads(self, tuid1, tuid2, *args):
         '''
-        Join threads, indicating that they are now a single thread.
+        Merge threads, indicating that they are now a single thread.
 
-        Returns the new TUID for the joined thread.
-        The TUIDs for the input threads are retired.  An annotation is made in
-        the MailDB indicating that these TUIDs are part of the newly returned
-        TUID.  This way the MailDB will still be able to properly handle
-        messages containing X-AMT-TUID headers with one of the old TUIDs.
+        tuid2 and any subsequent TUID arguments will be merged into tuid1.
+        All messages in tuid2 will now be marked as being in tuid1.
 
-        The new thread will have thread labels that are the union of the labels
-        on all of the original input threads.
+        tuid2 will be retired, and an annotation will be left in the MailDB
+        indicating that tuid2 was merged into tuid1.  This way the MailDB will
+        still be able to properly handle messages containing X-AMT-TUID headers
+        with the old TUID.
+
+        Any thread labels that exist for tuid2 will be added to tuid1.
+
+        Raises an exception if tuid2 or any of the subsequent TUIDs was
+        previously been merged to another thread (other than tuid1).
+
+        Returns the merged thread's TUID.  Normally this is tuid1, although
+        if tuid1 had previously been merged into another thread this will be
+        the thread that tuid1 was merged into.
         '''
         raise NotImplementedError()
 
@@ -390,7 +398,7 @@ class TUID:
     A unique identifier for an email thread.
 
     Thread IDs are assigned to messages heuristically.  Threads may be
-    joined/split after TUIDs have been allocated and assigned to messages.
+    merged/split after TUIDs have been allocated and assigned to messages.
 
     Contents
     --------

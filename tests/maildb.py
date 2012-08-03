@@ -33,6 +33,8 @@ class MailDBTestCase(unittest.TestCase):
         cls.dbdir = os.path.join(cls.tmpdir.name, 'maildb')
         cls.db = MailDB.create_db(cls.dbdir)
 
+        cls.known_tuids = set()
+
     @classmethod
     def tearDownClass(cls):
         if cls.tmpdir is not None:
@@ -64,6 +66,15 @@ class MailDBTestCase(unittest.TestCase):
         return amt.message.new_message(subject=subject, body=body,
                                        from_addr=from_addr, to=to,
                                        **kwargs)
+
+    def add_unique_tuid(self, tuid):
+        cls = type(self)
+
+        # Check that this TUID really is unique from any other TUID we
+        # have seen before
+        self.assertNotIn(tuid, cls.known_tuids)
+        # Remember this TUID for future unique comparisions
+        cls.known_tuids.add(tuid)
 
 
 class MailDBTests(MailDBTestCase):
@@ -176,26 +187,79 @@ class MailDBTests(MailDBTestCase):
         self.assertEqual(set(self.db.get_label_details(muid)),
                          expected_details)
 
-    def test_get_tuid(self):
+    def test_get_tuid_referenced(self):
+        self.run_test_get_tuid_referenced('References')
+
+    def test_get_tuid_in_reply_to(self):
+        self.run_test_get_tuid_referenced('In-Reply-To')
+
+    def run_test_get_tuid_referenced(self, header):
+        # Create two messages, where msg2 references msg1
         msg1 = self.new_message()
-
-        muid1 = self.db.get_muid(msg1, commit=False)
-        tuid1 = self.db.get_tuid(muid1, msg1, commit=False)
-        self.assertEqual(set(self.db.get_thread_msgs(tuid1)),
-                         set([muid1]))
-
         msg2 = self.new_message()
-        muid2 = self.db.get_muid(msg2, commit=False)
-        tuid2 = self.db.get_tuid(muid2, msg2, commit=False)
-        self.assertNotEqual(tuid1, tuid2)
-        self.assertEqual(set(self.db.get_thread_msgs(tuid2)),
-                         set([muid2]))
+        msg2.add_header(header, msg1.get_message_id())
 
-        # msg1_1 references msg_1, but has a different subject
-        msg1_1 = self.new_message()
-        msg1_1.add_header('References', msg1.get_message_id())
-        muid1_1 = self.db.get_muid(msg1_1, commit=False)
-        tuid1_1 = self.db.get_tuid(muid1_1, msg1_1, commit=False)
-        self.assertEqual(tuid1_1, tuid1)
-        self.assertEqual(set(self.db.get_thread_msgs(tuid1)),
-                         set([muid1, muid1_1]))
+        # Import msg1
+        muid1, tuid1 = self.add_msg_unique(msg1)
+
+        # Import msg2
+        muid2 = self.add_msg_in_thread(msg2, tuid1)
+
+    def test_get_tuid_referenced_reverse(self):
+        self.run_test_get_tuid_referenced_reverse('References')
+
+    def test_get_tuid_in_reply_to_reverse(self):
+        self.run_test_get_tuid_referenced_reverse('In-Reply-To')
+
+    def run_test_get_tuid_referenced_reverse(self, header):
+        # Create two messages, where msg2 references msg1
+        msg1 = self.new_message()
+        msg2 = self.new_message()
+        msg2.add_header(header, msg1.get_message_id())
+
+        # Import msg2 first
+        muid2, tuid2 = self.add_msg_unique(msg2)
+
+        # Import msg1
+        muid1 = self.add_msg_in_thread(msg1, tuid2)
+
+    def test_get_tuid_join_references(self):
+        msg1 = self.new_message()
+        msg2 = self.new_message()
+        msg3 = self.new_message()
+
+        # msg3 references both msg2 and msg1
+        refs3 = ' '.join((msg1.get_message_id(), msg2.get_message_id()))
+        msg3.add_header('References', refs3)
+
+        # Add msg1 and msg2, which initially both appear to be from separate
+        # threads.
+        muid1, tuid1 = self.add_msg_unique(msg1)
+        muid2, tuid2 = self.add_msg_unique(msg2)
+
+        # Next add msg3.  This should join the two threads created earlier
+        muid3 = self.db.get_muid(msg3, commit=False)
+        tuid3 = self.db.get_tuid(muid3, msg3, commit=False)
+        if tuid3 != tuid1:
+            self.assertEqual(tuid3, tuid2)
+        self.check_thread_msgs(tuid1, [muid1, muid2, muid3])
+        self.check_thread_msgs(tuid2, [muid1, muid2, muid3])
+
+    def add_msg_unique(self, msg):
+        muid = self.db.get_muid(msg, commit=False)
+        tuid = self.db.get_tuid(muid, msg, commit=False)
+        self.add_unique_tuid(tuid)
+        self.check_thread_msgs(tuid, [muid])
+        return (muid, tuid)
+
+    def add_msg_in_thread(self, msg, tuid):
+        existing_muids = self.db.get_thread_msgs(tuid)
+
+        muid = self.db.get_muid(msg, commit=False)
+        new_tuid = self.db.get_tuid(muid, msg, commit=False)
+        self.assertEqual(new_tuid, tuid)
+        self.check_thread_msgs(tuid, existing_muids + [muid])
+        return muid
+
+    def check_thread_msgs(self, tuid, muids):
+        self.assertEqual(set(self.db.get_thread_msgs(tuid)), set(muids))

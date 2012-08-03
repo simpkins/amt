@@ -2,11 +2,13 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import base64
 import datetime
 import email.header
 import email.message
 import email.parser
 import email.utils
+import hashlib
 import re
 import time
 
@@ -54,6 +56,7 @@ class Message:
         self._to = AddressList()
         self._cc = AddressList()
         self._from_addr = AddressList()
+        self._subject_hdr = None
         self._subject = None
         for k, v in self.msg._headers:
             if k.lower() == 'to':
@@ -63,7 +66,8 @@ class Message:
             elif k.lower() == 'from':
                 self._from_addr.extend(self._parse_addresses(v))
             elif self._subject is None and k.lower() == 'subject':
-                self._subject = str(self._decode_header(k, v))
+                self._subject_hdr = self._decode_header(k, v)
+                self._subject = str(self._subject_hdr)
 
         # The body will be parsed lazily if needed
         self._body_text = None
@@ -255,7 +259,7 @@ class Message:
         # having to manually invoke _decode_header() in our own wrapper
         # functions.
 
-        if hasattr(name, '_chunks'):
+        if hasattr(value, '_chunks'):
             # Looks like it is already an email.header.Header object
             return value
 
@@ -325,6 +329,30 @@ class Message:
                     break
             else:
                 return subj
+
+    def binary_fingerprint(self):
+        h = hashlib.md5()
+
+        # Hash the Subject, From, and Message-ID headers
+        for header in (self._subject_hdr, self.get_header('From'),
+                       self.get_header('Message-ID')):
+            if header is None:
+                continue
+            encoded = header.encode()[:40].encode('ascii', 'surrogateescape')
+            h.update(encoded)
+
+        # Hash the first 40 bytes of the first body part
+        for part in self.iter_body_msgs():
+            payload = part.get_payload(decode=False)
+            if isinstance(payload, str):
+                payload = payload.encode('ascii', 'surrogateescape')
+            h.update(payload[:40])
+            break
+
+        return h.digest()
+
+    def fingerprint(self):
+        return base64.b64encode(self.binary_fingerprint())
 
     def _parse_addresses(self, header):
         return email.utils.getaddresses([header])

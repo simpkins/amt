@@ -86,9 +86,11 @@ class MailDB(interface.MailDB):
         db.execute('CREATE TABLE messages ('
                    'muid INTEGER PRIMARY KEY AUTOINCREMENT, '
                    'message_id BLOB, subject BLOB, '
-                   'timestamp DATETIME)')
+                   'timestamp DATETIME, fingerprint BLOB)')
         db.execute('CREATE INDEX messages_by_message_id '
                    'ON messages (message_id)')
+        db.execute('CREATE INDEX messages_by_fingerprint '
+                   'ON messages (fingerprint)')
 
         db.execute('CREATE TABLE msg_locations ('
                    'muid INTEGER, location BLOB, '
@@ -110,10 +112,13 @@ class MailDB(interface.MailDB):
         db.execute('CREATE INDEX message_ids_to_thread_by_msg_id '
                    'ON message_ids_to_thread (message_id)')
 
+        db.execute('CREATE TABLE merged_threads '
+                   '(merged_from INTEGER PRIMARY KEY, merged_to INTEGER)')
+
         # The 'automatic' field records if this thread was automatically
         # created by get_tuid(), or was manually created by the user explicitly
         # splitting threads.  This is used to prevent the code from
-        # automatically re-joining threads that had been explicitly split.
+        # automatically re-merging threads that had been explicitly split.
         db.execute('CREATE TABLE threads ('
                    'tuid INTEGER PRIMARY KEY AUTOINCREMENT, '
                    'subject STRING, '
@@ -146,11 +151,13 @@ class MailDB(interface.MailDB):
             return self._handle_existing_muid_header(muid_hdr, msg)
 
         muid = None
+        fingerprint = None
         if dup_check:
-            muid = self._search_for_existing_muid(msg)
+            fingerprint = msg.fingerprint()
+            muid = self._search_for_existing_muid(msg, fingerprint)
 
         if muid is None:
-            muid = self._allocate_muid(msg)
+            muid = self._allocate_muid(msg, fingerprint)
 
         if update_header:
             msg.add_header(MUID_HEADER, muid.value)
@@ -168,17 +175,19 @@ class MailDB(interface.MailDB):
         msg_id = msg.get_message_id()
         timestamp = int(msg.timestamp)
 
-        cursor = self.db.execute('SELECT (message_id, subject, timestamp) '
-                                 'FROM messages WHERE muid = intid')
+        cursor = self.db.execute(
+            'SELECT (message_id, subject, timestamp, fingerprint) '
+            'FROM messages WHERE muid = intid')
         results = list(cursor)
         if not results:
             # Hmm.  The message has a MUID we don't know about.
             # Maybe someone is rebuilding the database?
             # Just add this entry.
             self.db.execute('INSERT INTO messages '
-                            '(muid, message_id, subject, timestamp) '
+                            '(muid, message_id, subject, timestamp, '
+                            'fingerprint) '
                             'VALUES (?, ?, ?, ?)',
-                            (intid, msg.subject, timestamp))
+                            (intid, msg.subject, timestamp, msg.fingerprint()))
             return MUID(muid_hdr)
 
         # Log a warning if this message doesn't look like the information
@@ -198,25 +207,13 @@ class MailDB(interface.MailDB):
 
         return MUID(muid_hdr)
 
-    def _search_for_existing_muid(self, msg):
-        msg_id = msg.get_message_id()
-        timestamp = int(msg.timestamp)
-        if msg_id is None:
-            # Search by subject and timestamp instead.
-            # This search will be slow.  Maybe skip it?
-            cursor = self.db.execute(
-                'SELECT muid, message_id, subject, timestamp '
-                'FROM messages WHERE '
-                'message_id IS NULL AND subject = ? AND timestamp = ?',
-                (msg.subject, timestamp))
-        else:
-            # TODO: Should we check the timestamps for agreement?
-            cursor = self.db.execute(
-                'SELECT muid, message_id, subject, timestamp '
-                'FROM messages WHERE '
-                'message_id = ? AND subject = ?',
-                (msg_id, msg.subject))
-
+    def _search_for_existing_muid(self, msg, fingerprint=None):
+        if fingerprint is None:
+            fingerprint = msg.fingerprint()
+        cursor = self.db.execute(
+            'SELECT muid, message_id, subject, timestamp '
+            'FROM messages WHERE fingerprint = ?',
+            (fingerprint,))
         results = list(cursor)
         if not results:
             return None
@@ -234,20 +231,25 @@ class MailDB(interface.MailDB):
 
         # Multiple matches.  Just return the first one whose timestamp matches.
         # (These are quite possibly just duplicate entries of each other.)
+        timestamp = int(msg.timestamp)
         for entry in results:
             if entry[3] == timestamp:
                 return self._intid2muid(entry[0])
 
         return None
 
-    def _allocate_muid(self, msg):
+    def _allocate_muid(self, msg, fingerprint=None):
         msg_id = msg.get_message_id()
         timestamp = int(msg.timestamp)
 
-        cursor = self.db.execute('INSERT INTO messages '
-                                 '(message_id, subject, timestamp) '
-                                 'VALUES (?, ?, ?)',
-                                 (msg_id, msg.subject, timestamp))
+        if fingerprint is None:
+            fingerprint = msg.fingerprint()
+
+        cursor = self.db.execute(
+            'INSERT INTO messages '
+            '(message_id, subject, timestamp, fingerprint) '
+            'VALUES (?, ?, ?, ?)',
+            (msg_id, msg.subject, timestamp, fingerprint))
         return self._intid2muid(cursor.lastrowid)
 
     def _intid2muid(self, internal_id):
@@ -340,7 +342,7 @@ class MailDB(interface.MailDB):
         raise NotImplementedError()
 
     def get_thread_msgs(self, tuid):
-        intid = self._tuid2intid(tuid)
+        intid = self._resolve_int_tuid(self._tuid2intid(tuid))
         cursor = self.db.execute('SELECT muid FROM msg_thread '
                                  'WHERE tuid = ?', (intid,))
         return [self._intid2muid(entry[0]) for entry in cursor]
@@ -453,8 +455,82 @@ class MailDB(interface.MailDB):
         if len(results) == 1:
             return results[0]
 
-        # FIXME: resolve the conflict
-        raise NotImplementedError()
+        # This messages references several threads that we previously thought
+        # were independent.  Join them together, as long as they weren't
+        # manually split apart before.
+
+        # FIXME: Exclude threads marked as manually split
+        tuid = results[0]
+        for other_tuid in results[1:]:
+            self._merge_int_tuids(tuid, other_tuid)
+
+        return tuid
+
+    @committable
+    def merge_threads(self, tuid1, tuid2, *args):
+        if args:
+            self.merge_threads(tuid1, *args)
+
+        int_tuid1 = self._tuid2intid(tuid1)
+        int_tuid2 = self._tuid2intid(tuid2)
+        int_result = self._merge_int_tuids(int_tuid1, int_tuid2)
+        return self._intid2tuid(int_result)
+
+    def _merge_int_tuids(self, int_tuid1, int_tuid2):
+        # If tuid1 had already been merged into another thread, use that tuid
+        int_tuid = self._resolve_int_tuid(int_tuid1)
+
+        real_tuid2 = self._resolve_int_tuid(int_tuid2)
+        if real_tuid2 == int_tuid:
+            # These threads have already been merged together.
+            # Nothing left to do
+            return int_tuid
+        if real_tuid2 != int_tuid2:
+            # tuid2 was already merged into some other thread
+            raise MailDBError('atttempted to merge TUID %s into %s, '
+                              'after it has already been merged into %s',
+                              tuid2, tuid, self._intid2tuid(real_tuid2))
+
+        # Change all of the messages in tuid2 to point to tuid1
+        self.db.execute('UPDATE msg_thread '
+                        'SET tuid = ? WHERE tuid = ?',
+                        (int_tuid, int_tuid2))
+        self.db.execute('UPDATE message_ids_to_thread '
+                        'SET tuid = ? WHERE tuid = ?',
+                        (int_tuid, int_tuid2))
+
+        # Update merged_threads so that anything previously pointing at tuid2
+        # now points directly to tuid.
+        self.db.execute('UPDATE merged_threads '
+                        'SET merged_to = ? WHERE merged_to = ?',
+                        (int_tuid, int_tuid2))
+
+        # Leave an annotation that tuid2 was merged into tuid1
+        self.db.execute('INSERT INTO merged_threads '
+                        '(merged_from, merged_to) VALUES (?, ?)',
+                        (int_tuid2, int_tuid))
+
+        return int_tuid
+
+    def resolve_tuid(self, tuid):
+        int_tuid = self._tuid2intid(tuid)
+        int_resolved = self._resolve_int_tuid(int_tuid)
+        return self._intid2tuid(int_tuid)
+
+    def _resolve_int_tuid(self, int_tuid):
+        cursor = self.db.execute('SELECT merged_to FROM merged_threads '
+                                 'WHERE merged_from = ?',
+                                 (int_tuid,))
+        results = list(cursor)
+        if not results:
+            return int_tuid
+        assert len(results) == 1
+        merged_to = results[0][0]
+
+        # merge_threads() should update the merged_threads table to always
+        # point directly at the final result.
+        assert self._resolve_int_tuid(merged_to) == merged_to
+        return merged_to
 
     def _search_for_tuid_by_thread_index(self, muid, msg):
         # TODO: Use the Thread-Index header
@@ -464,7 +540,7 @@ class MailDB(interface.MailDB):
         # Search for threads with similar subjects
         # Only treat them as the same thread if they are close enough together
         # in time.  This new message may be close enough in time to multiple
-        # existing TUIDs, in which case we should probably join them (unless
+        # existing TUIDs, in which case we should probably merge them (unless
         # they were explicitly separated before...)
         cursor = self.db.execute('SELECT '
                                  'tuid, start_time, end_time, automatic '
@@ -486,7 +562,7 @@ class MailDB(interface.MailDB):
         if len(for_consideration) == 1:
             return for_consideration[0][0]
 
-        # We have multiple matches.  We should join these threads together,
+        # We have multiple matches.  We should merge these threads together,
         # unless they were explicitly separated.
         raise NotImplementedError()
 
