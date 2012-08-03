@@ -79,9 +79,8 @@ class MailDB(interface.MailDB):
         sqlite_path = os.path.join(path, 'maildb.sqlite')
         db = sqlite3.connect(sqlite_path)
 
-        db.execute('CREATE TABLE metadata ('
-                   'key TEXT UNIQUE, value TEXT, '
-                   'PRIMARY KEY (key) ON CONFLICT REPLACE)')
+        db.execute('CREATE TABLE metadata '
+                   '(key TEXT PRIMARY KEY ON CONFLICT REPLACE, value TEXT)')
 
         db.execute('CREATE TABLE messages ('
                    'muid INTEGER PRIMARY KEY AUTOINCREMENT, '
@@ -101,6 +100,7 @@ class MailDB(interface.MailDB):
                    'muid INTEGER, label TEXT, automatic BOOLEAN, '
                    'UNIQUE (muid, label) ON CONFLICT IGNORE)')
         db.execute('CREATE INDEX labels_by_muid ON msg_labels (muid)')
+        db.execute('CREATE INDEX msgs_by_label ON msg_labels (label)')
 
         db.execute('CREATE TABLE msg_thread ('
                    'muid INTEGER PRIMARY KEY, tuid INTEGER, '
@@ -111,9 +111,13 @@ class MailDB(interface.MailDB):
                    '(message_id BLOB, tuid INTEGER)')
         db.execute('CREATE INDEX message_ids_to_thread_by_msg_id '
                    'ON message_ids_to_thread (message_id)')
+        db.execute('CREATE INDEX message_ids_to_thread_by_tuid '
+                   'ON message_ids_to_thread (tuid)')
 
         db.execute('CREATE TABLE merged_threads '
                    '(merged_from INTEGER PRIMARY KEY, merged_to INTEGER)')
+        db.execute('CREATE INDEX merged_threads_by_to '
+                   'ON merged_threads (merged_to)')
 
         # The 'automatic' field records if this thread was automatically
         # created by get_tuid(), or was manually created by the user explicitly
