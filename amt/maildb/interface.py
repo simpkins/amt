@@ -283,13 +283,13 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def add_thread_label(self, tuid, label):
+    def add_thread_label(self, tuid, label, automatic=False, commit=True):
         '''
         Add a new label for the specified thread.
         '''
-        raise NotImplementedError()
+        self.add_thread_labels(tuid, [(label, automatic)], commit=commit)
 
-    def add_thread_labels(self, tuid, labels):
+    def add_thread_labels(self, tuid, labels, automatic=False, commit=True):
         '''
         Add new labels for the specified thread.
         '''
@@ -298,6 +298,15 @@ class MailDB:
     def get_thread_labels(self, tuid):
         '''
         Get the labels for the specified thread.
+        '''
+        return [label
+                for label, automatic in self.get_thread_label_details(tuid)]
+
+    def get_thread_label_details(self, tuid):
+        '''
+        Get the labels for the specified thread.
+
+        Returns a list of (label, automatic) tuples.
         '''
         raise NotImplementedError()
 

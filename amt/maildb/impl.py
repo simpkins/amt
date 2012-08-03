@@ -102,6 +102,12 @@ class MailDB(interface.MailDB):
         db.execute('CREATE INDEX labels_by_muid ON msg_labels (muid)')
         db.execute('CREATE INDEX msgs_by_label ON msg_labels (label)')
 
+        db.execute('CREATE TABLE thread_labels ('
+                   'tuid INTEGER, label TEXT, automatic BOOLEAN, '
+                   'UNIQUE (tuid, label) ON CONFLICT IGNORE)')
+        db.execute('CREATE INDEX labels_by_tuid ON thread_labels (tuid)')
+        db.execute('CREATE INDEX threads_by_label ON thread_labels (label)')
+
         db.execute('CREATE TABLE msg_thread ('
                    'muid INTEGER PRIMARY KEY, tuid INTEGER, '
                    'UNIQUE (muid, tuid) ON CONFLICT IGNORE)')
@@ -147,6 +153,98 @@ class MailDB(interface.MailDB):
             raise AssertionError('found multiple entries for config key '
                                  '"%s": %s' % (key, results))
         return results[0]
+
+    def commit(self):
+        self.db.commit()
+
+    @committable
+    def add_location(self, muid, location):
+        assert isinstance(muid, MUID)
+        self.db.execute('INSERT INTO msg_locations VALUES (?, ?)',
+                        (muid, location))
+
+    @committable
+    def remove_location(self, muid, location):
+        assert isinstance(muid, MUID)
+        loc_value = location.serialize()
+        self.db.execute('DELETE FROM msg_locations WHERE '
+                        'muid = ? AND location = ?',
+                        (muid, loc_value))
+
+    def get_locations(self, muid):
+        cursor = self.db.execute('SELECT location FROM msg_locations '
+                                 'WHERE muid = ?', (muid,))
+        return [Location.deserialize(entry[0]) for entry in cursor]
+
+    @committable
+    def add_labels(self, muid, labels, automatic=False):
+        assert isinstance(muid, MUID)
+        def _gen_params():
+            for label in labels:
+                if isinstance(label, tuple):
+                    yield (muid, label[0], bool(label[1]))
+                else:
+                    yield (muid, label, bool(automatic))
+
+        self.db.executemany('INSERT INTO msg_labels VALUES (?, ?, ?)',
+                            _gen_params())
+
+    @committable
+    def remove_labels(self, muid, labels):
+        assert isinstance(muid, MUID)
+        label_qmarks = ', '.join('?' for label in labels)
+        params = (muid,) + tuple(labels)
+        self.db.executemany('DELETE FROM msg_labels WHERE muid = ? '
+                            'AND label IN (%s)' % (label_qmarks,),
+                            params)
+
+    def get_label_details(self, muid):
+        assert isinstance(muid, MUID)
+        cursor = self.db.execute('SELECT label, automatic FROM msg_labels '
+                                 'WHERE muid = ?', (muid,))
+        return list(cursor)
+
+    @committable
+    def add_thread_labels(self, tuid, labels, automatic=False):
+        assert isinstance(tuid, TUID)
+        def _gen_params():
+            for label in labels:
+                if isinstance(label, tuple):
+                    yield (tuid, label[0], bool(label[1]))
+                else:
+                    yield (tuid, label, bool(automatic))
+
+        self.db.executemany('INSERT INTO thread_labels VALUES (?, ?, ?)',
+                            _gen_params())
+
+    @committable
+    def remove_thread_labels(self, tuid, labels):
+        assert isinstance(tuid, TUID)
+        label_qmarks = ', '.join('?' for label in labels)
+        params = (tuid,) + tuple(labels)
+        self.db.executemany('DELETE FROM thread_labels WHERE tuid = ? '
+                            'AND label IN (%s)' % (label_qmarks,),
+                            params)
+
+    def get_thread_label_details(self, tuid):
+        assert isinstance(tuid, TUID)
+        cursor = self.db.execute('SELECT label, automatic FROM thread_labels '
+                                 'WHERE tuid = ?', (tuid,))
+        return list(cursor)
+
+    def index_msg(self, muid, msg, reindex=True):
+        assert isinstance(muid, MUID)
+        raise NotImplementedError()
+
+    def search(self, query):
+        raise NotImplementedError()
+
+    def get_thread_msgs(self, tuid):
+        assert isinstance(tuid, TUID)
+        tuid = tuid.resolve()
+        cursor = self.db.execute('SELECT muid FROM msg_thread '
+                                 'WHERE tuid = ?', (tuid,))
+        return [self._create_muid(entry[0]) for entry in cursor]
 
     @committable
     def get_muid(self, msg, update_header=True, dup_check=True):
@@ -255,70 +353,6 @@ class MailDB(interface.MailDB):
             'VALUES (?, ?, ?, ?)',
             (msg_id, msg.subject, timestamp, fingerprint))
         return self._create_muid(cursor.lastrowid)
-
-    def commit(self):
-        self.db.commit()
-
-    @committable
-    def add_location(self, muid, location):
-        assert isinstance(muid, MUID)
-        self.db.execute('INSERT INTO msg_locations VALUES (?, ?)',
-                        (muid, location))
-
-    @committable
-    def remove_location(self, muid, location):
-        assert isinstance(muid, MUID)
-        loc_value = location.serialize()
-        self.db.execute('DELETE FROM msg_locations WHERE '
-                        'muid = ? AND location = ?',
-                        (muid, loc_value))
-
-    def get_locations(self, muid):
-        cursor = self.db.execute('SELECT location FROM msg_locations '
-                                 'WHERE muid = ?', (muid,))
-        return [Location.deserialize(entry[0]) for entry in cursor]
-
-    @committable
-    def add_labels(self, muid, labels, automatic=False):
-        assert isinstance(muid, MUID)
-        def _gen_params():
-            for label in labels:
-                if isinstance(label, tuple):
-                    yield (muid, label[0], bool(label[1]))
-                else:
-                    yield (muid, label, bool(automatic))
-
-        self.db.executemany('INSERT INTO msg_labels VALUES (?, ?, ?)',
-                            _gen_params())
-
-    @committable
-    def remove_labels(self, muid, labels):
-        assert isinstance(muid, MUID)
-        label_qmarks = ', '.join('?' for label in labels)
-        params = (muid,) + tuple(labels)
-        self.db.executemany('DELETE FROM msg_labels WHERE  muid = ? '
-                            'AND label IN (%s)' % (label_qmarks,),
-                            params)
-
-    def get_label_details(self, muid):
-        assert isinstance(muid, MUID)
-        cursor = self.db.execute('SELECT label, automatic FROM msg_labels '
-                                 'WHERE muid = ?', (muid,))
-        return list(cursor)
-
-    def index_msg(self, muid, msg, reindex=True):
-        assert isinstance(muid, MUID)
-        raise NotImplementedError()
-
-    def search(self, query):
-        raise NotImplementedError()
-
-    def get_thread_msgs(self, tuid):
-        assert isinstance(tuid, TUID)
-        tuid = tuid.resolve()
-        cursor = self.db.execute('SELECT muid FROM msg_thread '
-                                 'WHERE tuid = ?', (tuid,))
-        return [self._create_muid(entry[0]) for entry in cursor]
 
     @committable
     def get_tuid(self, muid, msg, update_header=True):

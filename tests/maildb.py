@@ -187,6 +187,36 @@ class MailDBTests(MailDBTestCase):
         self.assertEqual(set(self.db.get_label_details(muid)),
                          expected_details)
 
+    def test_thread_labels(self):
+        msg = self.new_message()
+        muid = self.db.get_muid(msg, commit=False)
+        tuid = self.db.get_tuid(muid, msg, commit=False)
+
+        labels = self.db.get_thread_labels(tuid)
+        self.assertEqual(labels, [])
+
+        expected = set()
+        self.db.add_thread_label(tuid, 'test_label', commit=False)
+        expected.add('test_label')
+        self.assertEqual(set(self.db.get_thread_labels(tuid)), expected)
+
+        self.db.add_thread_label(tuid, 'auto_label',
+                                 automatic=True, commit=False)
+        expected.add('auto_label')
+        self.assertEqual(set(self.db.get_thread_labels(tuid)), expected)
+
+        self.db.add_thread_labels(tuid, ['foo', 'bar', ('auto2', True)],
+                                  commit=False)
+        expected.update(['foo', 'bar', 'auto2'])
+        self.assertEqual(set(self.db.get_thread_labels(tuid)), expected)
+
+        expected_details = set([
+            ('test_label', False), ('auto_label', True),
+            ('foo', False), ('bar', False), ('auto2', True),
+        ])
+        self.assertEqual(set(self.db.get_thread_label_details(tuid)),
+                         expected_details)
+
     def test_get_tuid_referenced(self):
         self.run_test_get_tuid_referenced('References')
 
