@@ -160,14 +160,14 @@ class MailDB(interface.MailDB):
             muid = self._allocate_muid(msg, fingerprint)
 
         if update_header:
-            msg.add_header(MUID_HEADER, muid.value)
+            msg.add_header(MUID_HEADER, muid.value())
 
         return muid
 
     def _handle_existing_muid_header(self, muid_hdr, msg):
         # Convert this into an internal ID.
         try:
-            intid = self._muid2intid(muid_hdr)
+            muid = self._parse_muid(muid_hdr)
         except BadMUIDError:
             # FIXME: handle the error
             raise
@@ -187,8 +187,8 @@ class MailDB(interface.MailDB):
                             '(muid, message_id, subject, timestamp, '
                             'fingerprint) '
                             'VALUES (?, ?, ?, ?)',
-                            (intid, msg.subject, timestamp, msg.fingerprint()))
-            return MUID(muid_hdr)
+                            (muid, msg.subject, timestamp, msg.fingerprint()))
+            return muid
 
         # Log a warning if this message doesn't look like the information
         # already in the DB.
@@ -205,7 +205,7 @@ class MailDB(interface.MailDB):
                               msg_id, entry[0], msg.subject, entry[1],
                               timestamp, entry[2])
 
-        return MUID(muid_hdr)
+        return muid
 
     def _search_for_existing_muid(self, msg, fingerprint=None):
         if fingerprint is None:
@@ -227,14 +227,14 @@ class MailDB(interface.MailDB):
         # the body contents?
         if len(results) == 1:
             entry = results[0]
-            return self._intid2muid(entry[0])
+            return self._create_muid(entry[0])
 
         # Multiple matches.  Just return the first one whose timestamp matches.
         # (These are quite possibly just duplicate entries of each other.)
         timestamp = int(msg.timestamp)
         for entry in results:
             if entry[3] == timestamp:
-                return self._intid2muid(entry[0])
+                return self._create_muid(entry[0])
 
         return None
 
@@ -250,130 +250,99 @@ class MailDB(interface.MailDB):
             '(message_id, subject, timestamp, fingerprint) '
             'VALUES (?, ?, ?, ?)',
             (msg_id, msg.subject, timestamp, fingerprint))
-        return self._intid2muid(cursor.lastrowid)
-
-    def _intid2muid(self, internal_id):
-        '''
-        Convert an internal ID used in the sqlite database to a MUID.
-        '''
-        return MUID(self.muid_prefix + str(internal_id))
-
-    def _muid2intid(self, muid):
-        '''
-        Convert a MUID to an internal ID for use in the sqlite database.
-        '''
-        return self._id2internal(muid.value, self.muid_prefix, BadMUIDError)
-
-    def _intid2tuid(self, internal_id):
-        '''
-        Convert an internal ID used in the sqlite database to a MUID.
-        '''
-        return TUID(self.tuid_prefix + str(internal_id))
-
-    def _tuid2intid(self, tuid):
-        '''
-        Convert a MUID to an internal ID for use in the sqlite database.
-        '''
-        return self._id2internal(tuid.value, self.tuid_prefix, BadTUIDError)
-
-    def _id2internal(self, value, prefix, error_class):
-        if not value.startswith(prefix):
-            raise error_class(value, 'must start with "%s"', prefix)
-        id_suffix = value[len(prefix):]
-        return int(id_suffix)
+        return self._create_muid(cursor.lastrowid)
 
     def commit(self):
         self.db.commit()
 
     @committable
     def add_location(self, muid, location):
-        intid = self._muid2intid(muid)
+        assert isinstance(muid, MUID)
         self.db.execute('INSERT INTO msg_locations VALUES (?, ?)',
-                        (intid, location))
+                        (muid, location))
 
     @committable
     def remove_location(self, muid, location):
-        intid = self._muid2intid(muid)
+        assert isinstance(muid, MUID)
         loc_value = location.serialize()
         self.db.execute('DELETE FROM msg_locations WHERE '
                         'muid = ? AND location = ?',
-                        (intid, loc_value))
+                        (muid, loc_value))
 
     def get_locations(self, muid):
-        intid = self._muid2intid(muid)
         cursor = self.db.execute('SELECT location FROM msg_locations '
-                                 'WHERE muid = ?', (intid,))
+                                 'WHERE muid = ?', (muid,))
         return [Location.deserialize(entry[0]) for entry in cursor]
 
     @committable
     def add_labels(self, muid, labels, automatic=False):
-        intid = self._muid2intid(muid)
-
+        assert isinstance(muid, MUID)
         def _gen_params():
             for label in labels:
                 if isinstance(label, tuple):
-                    yield (intid, label[0], bool(label[1]))
+                    yield (muid, label[0], bool(label[1]))
                 else:
-                    yield (intid, label, bool(automatic))
+                    yield (muid, label, bool(automatic))
 
         self.db.executemany('INSERT INTO msg_labels VALUES (?, ?, ?)',
                             _gen_params())
 
     @committable
     def remove_labels(self, muid, labels):
-        intid = self._muid2intid(muid)
-
+        assert isinstance(muid, MUID)
         label_qmarks = ', '.join('?' for label in labels)
-        params = (intid,) + tuple(labels)
+        params = (muid,) + tuple(labels)
         self.db.executemany('DELETE FROM msg_labels WHERE  muid = ? '
                             'AND label IN (%s)' % (label_qmarks,),
                             params)
 
     def get_label_details(self, muid):
-        intid = self._muid2intid(muid)
+        assert isinstance(muid, MUID)
         cursor = self.db.execute('SELECT label, automatic FROM msg_labels '
-                                 'WHERE muid = ?', (intid,))
+                                 'WHERE muid = ?', (muid,))
         return list(cursor)
 
     def index_msg(self, muid, msg, reindex=True):
+        assert isinstance(muid, MUID)
         raise NotImplementedError()
 
     def search(self, query):
         raise NotImplementedError()
 
     def get_thread_msgs(self, tuid):
-        intid = self._resolve_int_tuid(self._tuid2intid(tuid))
+        assert isinstance(tuid, TUID)
+        tuid = tuid.resolve()
         cursor = self.db.execute('SELECT muid FROM msg_thread '
-                                 'WHERE tuid = ?', (intid,))
-        return [self._intid2muid(entry[0]) for entry in cursor]
+                                 'WHERE tuid = ?', (tuid,))
+        return [self._create_muid(entry[0]) for entry in cursor]
 
     @committable
     def get_tuid(self, muid, msg, update_header=True):
-        internal_tuid = self._pick_tuid(muid, msg)
+        assert isinstance(muid, MUID)
+        tuid = self._pick_tuid(muid, msg)
 
         # Store the fact that this message belongs to this thread.
         # Store the MUID <--> TUID mapping
         self.db.execute('INSERT INTO msg_thread (muid, tuid) VALUES (?, ?)',
-                        (self._muid2intid(muid), internal_tuid))
+                        (muid, tuid))
 
         # Store the Message-ID <--> TUID mapping
         msg_id = msg.get_message_id()
         if msg_id is not None:
             self.db.execute('INSERT INTO message_ids_to_thread '
                             '(message_id, tuid) VALUES (?, ?)',
-                            (msg_id, internal_tuid))
+                            (msg_id, tuid))
 
         # Process the References and In-Reply-To headers from this message, and
         # store the fact that these Message-IDs belong to this thread.
         referenced_ids = msg.get_referenced_ids()
         self.db.executemany('INSERT INTO message_ids_to_thread '
                             '(message_id, tuid) VALUES (?, ?)',
-                            ((msg_id, internal_tuid)
+                            ((msg_id, tuid)
                              for msg_id in referenced_ids))
 
-        tuid = self._intid2tuid(internal_tuid)
         if update_header:
-            msg.add_header(TUID_HEADER, tuid.value)
+            msg.add_header(TUID_HEADER, tuid.value())
 
         return tuid
 
@@ -410,24 +379,23 @@ class MailDB(interface.MailDB):
     def _handle_existing_tuid_header(self, muid, msg, tuid_hdr):
         # Convert this into an internal ID.
         try:
-            intid = self._tuid2intid(tuid_hdr)
+            tuid = self._parse_tuid(tuid_hdr)
         except BadMUIDError:
             # FIXME: handle the error
             raise
 
         # FIXME Make sure this TUID is present in the DB, and add it if not
         raise NotImplementedError()
-        return intid
+        return tuid
 
     def _search_for_tuid_by_muid(self, muid, msg):
         # Check to see if this MUID already has a known thread
-        internal_muid = self._muid2intid(muid)
         c = self.db.execute('SELECT tuid FROM msg_thread WHERE muid = ?',
-                            (internal_muid,))
+                            (muid,))
         results = list(c)
         if results:
             assert len(results) == 1
-            return results[0][0]
+            return self._create_tuid(results[0][0])
 
         return None
 
@@ -448,89 +416,59 @@ class MailDB(interface.MailDB):
         cursor = self.db.execute('SELECT tuid FROM message_ids_to_thread '
                                  'WHERE message_id IN (%s)' % qmarks,
                                  tuple(msg_ids))
-        results = [entry[0] for entry in cursor]
+        tuids = [self._create_tuid(entry[0]) for entry in cursor]
 
-        if not results:
+        if not tuids:
             return None
-        if len(results) == 1:
-            return results[0]
+        if len(tuids) == 1:
+            return tuids[0]
 
         # This messages references several threads that we previously thought
         # were independent.  Join them together, as long as they weren't
         # manually split apart before.
 
         # FIXME: Exclude threads marked as manually split
-        tuid = results[0]
-        for other_tuid in results[1:]:
-            self._merge_int_tuids(tuid, other_tuid)
-
-        return tuid
+        return self.merge_threads(*tuids)
 
     @committable
     def merge_threads(self, tuid1, tuid2, *args):
         if args:
             self.merge_threads(tuid1, *args)
 
-        int_tuid1 = self._tuid2intid(tuid1)
-        int_tuid2 = self._tuid2intid(tuid2)
-        int_result = self._merge_int_tuids(int_tuid1, int_tuid2)
-        return self._intid2tuid(int_result)
-
-    def _merge_int_tuids(self, int_tuid1, int_tuid2):
         # If tuid1 had already been merged into another thread, use that tuid
-        int_tuid = self._resolve_int_tuid(int_tuid1)
+        tuid1 = tuid1.resolve()
 
-        real_tuid2 = self._resolve_int_tuid(int_tuid2)
-        if real_tuid2 == int_tuid:
+        real_tuid2 = tuid2.resolve()
+        if real_tuid2 == tuid1:
             # These threads have already been merged together.
             # Nothing left to do
-            return int_tuid
-        if real_tuid2 != int_tuid2:
+            return tuid1
+        if real_tuid2 != tuid2:
             # tuid2 was already merged into some other thread
             raise MailDBError('atttempted to merge TUID %s into %s, '
                               'after it has already been merged into %s',
-                              tuid2, tuid, self._intid2tuid(real_tuid2))
+                              tuid2, tuid1, real_tuid2)
 
         # Change all of the messages in tuid2 to point to tuid1
         self.db.execute('UPDATE msg_thread '
                         'SET tuid = ? WHERE tuid = ?',
-                        (int_tuid, int_tuid2))
+                        (tuid1, tuid2))
         self.db.execute('UPDATE message_ids_to_thread '
                         'SET tuid = ? WHERE tuid = ?',
-                        (int_tuid, int_tuid2))
+                        (tuid1, tuid2))
 
         # Update merged_threads so that anything previously pointing at tuid2
         # now points directly to tuid.
         self.db.execute('UPDATE merged_threads '
                         'SET merged_to = ? WHERE merged_to = ?',
-                        (int_tuid, int_tuid2))
+                        (tuid1, tuid2))
 
         # Leave an annotation that tuid2 was merged into tuid1
         self.db.execute('INSERT INTO merged_threads '
                         '(merged_from, merged_to) VALUES (?, ?)',
-                        (int_tuid2, int_tuid))
+                        (tuid2, tuid1))
 
-        return int_tuid
-
-    def resolve_tuid(self, tuid):
-        int_tuid = self._tuid2intid(tuid)
-        int_resolved = self._resolve_int_tuid(int_tuid)
-        return self._intid2tuid(int_tuid)
-
-    def _resolve_int_tuid(self, int_tuid):
-        cursor = self.db.execute('SELECT merged_to FROM merged_threads '
-                                 'WHERE merged_from = ?',
-                                 (int_tuid,))
-        results = list(cursor)
-        if not results:
-            return int_tuid
-        assert len(results) == 1
-        merged_to = results[0][0]
-
-        # merge_threads() should update the merged_threads table to always
-        # point directly at the final result.
-        assert self._resolve_int_tuid(merged_to) == merged_to
-        return merged_to
+        return tuid1
 
     def _search_for_tuid_by_thread_index(self, muid, msg):
         # TODO: Use the Thread-Index header
@@ -553,8 +491,9 @@ class MailDB(interface.MailDB):
 
         for_consideration = []
         for match in cursor:
-            tuid, start_time, end_time, automatic = match
+            tuid_value, start_time, end_time, automatic = match
             if (start_time - threshold) <= timestamp <= (end_time + threshold):
+                tuid = self._create_tuid(tuid_value)
                 for_consideration.append(tuid, automatic)
 
         if not for_consideration:
@@ -564,7 +503,10 @@ class MailDB(interface.MailDB):
 
         # We have multiple matches.  We should merge these threads together,
         # unless they were explicitly separated.
-        raise NotImplementedError()
+        #
+        # FIXME: don't merge explicitly split threads
+        tuids = [tuid for tuid, automatic in for_consideration]
+        return self.merged_threads(*tuids)
 
     def _allocate_tuid(self, msg, subject_root=None):
         if subject_root is None:
@@ -575,4 +517,78 @@ class MailDB(interface.MailDB):
                             '(subject, start_time, end_time, automatic) '
                             'VALUES (?, ?, ?, ?)',
                             (subject_root, timestamp, timestamp, True))
-        return c.lastrowid
+        return self._create_tuid(c.lastrowid)
+
+    def _create_muid(self, internal_id):
+        '''
+        Convert an internal ID used in the sqlite database to a MUID.
+        '''
+        return MUID(self, internal_id)
+
+    def _parse_muid(self, value):
+        '''
+        Convert a MUID string value to an MUID object.
+        '''
+        if not value.startswith(self.muid_prefix):
+            raise BadMUIDError(value, 'must start with "%s"', self.muid_prefix)
+        id_suffix = value[len(prefix):]
+        return MUID(self, int(id_suffix))
+
+    def _create_tuid(self, internal_id):
+        '''
+        Convert an internal ID used in the sqlite database to a TUID.
+        '''
+        return TUID(self, internal_id)
+
+    def _parse_tuid(self, value):
+        '''
+        Convert a TUID string value to an TUID object.
+        '''
+        if not value.startswith(self.tuid_prefix):
+            raise BadTUIDError(value, 'must start with "%s"', self.tuid_prefix)
+        id_suffix = value[len(prefix):]
+        return TUID(self, int(id_suffix))
+
+
+class MUID(interface.MUID):
+    def __init__(self, maildb, value):
+        assert isinstance(value, int)
+        self._maildb = maildb
+        self._value = value
+
+    def value(self):
+        return self._maildb.muid_prefix + str(self._value)
+
+    def __conform__(self, protocol):
+        if protocol is sqlite3.PrepareProtocol:
+            return self._value
+
+
+class TUID(interface.TUID):
+    def __init__(self, maildb, value):
+        assert isinstance(value, int)
+        self._maildb = maildb
+        self._value = value
+
+    def value(self):
+        return self._maildb.tuid_prefix + str(self._value)
+
+    def __conform__(self, protocol):
+        if protocol is sqlite3.PrepareProtocol:
+            return self._value
+
+    def resolve(self):
+        c = self._maildb.db.execute('SELECT merged_to FROM merged_threads '
+                                    'WHERE merged_from = ?', (self,))
+        results = list(c)
+        if not results:
+            return self
+        assert len(results) == 1
+
+        merged_to = TUID(self._maildb, results[0][0])
+
+        # merge_threads() should update the merged_threads table to always
+        # point directly at the final result.
+        assert merged_to.resolve() == merged_to
+
+        return merged_to

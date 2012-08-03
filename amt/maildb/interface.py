@@ -374,23 +374,26 @@ class MUID:
     --------
     An MUID is effectively just an opaque string value.
     '''
-    def __init__(self, value):
-        self.value = value
+    def __init__(self):
+        pass
+
+    def value(self):
+        raise NotImplementedError()
 
     def __str__(self):
-        return self.value
+        return self.value()
 
     def __repr__(self):
-        return 'MUID(%r)' % (self.value,)
+        return 'MUID(%r)' % (self.value(),)
 
     def __eq__(self, other):
-        return isinstance(other, MUID) and self.value == other.value
+        return isinstance(other, MUID) and self.value() == other.value()
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
     def __hash__(self):
-        return hash(self.value)
+        return hash(self.value())
 
 
 class TUID:
@@ -404,20 +407,23 @@ class TUID:
     --------
     A TUID is effectively just an opaque string value.
     '''
-    def __init__(self, value):
-        self.value = value
+    def __init__(self):
+        pass
+
+    def value(self):
+        raise NotImplementedError()
 
     def __str__(self):
-        return self.value
+        return self.value()
 
     def __repr__(self):
-        return 'TUID(%r)' % (self.value,)
+        return 'TUID(%r)' % (self.value(),)
 
     def __eq__(self, other):
-        return isinstance(other, TUID) and self.value == other.value
+        return isinstance(other, TUID) and self.value() == other.value()
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
     def __hash__(self):
-        return hash(self.value)
+        return hash(self.value())

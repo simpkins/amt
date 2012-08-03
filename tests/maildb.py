@@ -94,7 +94,7 @@ class MailDBTests(MailDBTestCase):
         msg5 = amt.message.new_message(**params)
 
         muid = self.db.get_muid(msg1, update_header=True, commit=False)
-        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value)
+        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value())
 
         muid2 = self.db.get_muid(msg2, update_header=False, dup_check=True,
                                  commit=False)
@@ -103,12 +103,12 @@ class MailDBTests(MailDBTestCase):
 
         muid3 = self.db.get_muid(msg3, update_header=True, dup_check=False,
                                  commit=False)
-        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value)
+        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value())
         self.assertNotEqual(muid, muid3)
 
         muid4 = self.db.get_muid(msg4, update_header=True, dup_check=True,
                                  commit=False)
-        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value)
+        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value())
         # muid4 should match either muid or muid3
         if muid4 != muid:
             self.assertEqual(muid4, muid3)
@@ -119,7 +119,7 @@ class MailDBTests(MailDBTestCase):
         msg5.add_header('Message-ID', '<another_id@example.com>')
         muid5 = self.db.get_muid(msg5, update_header=True, dup_check=True,
                                  commit=False)
-        self.assertEqual(msg5.get('X-AMT-MUID'), muid5.value)
+        self.assertEqual(msg5.get('X-AMT-MUID'), muid5.value())
         self.assertNotEqual(muid5, muid)
         self.assertNotEqual(muid5, muid3)
 
@@ -141,7 +141,7 @@ class MailDBTests(MailDBTestCase):
             m.remove_header('Message-ID')
 
         muid = self.db.get_muid(msg1, update_header=True, commit=False)
-        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value)
+        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value())
 
         muid2 = self.db.get_muid(msg2, update_header=False, dup_check=True,
                                  commit=False)
@@ -150,12 +150,12 @@ class MailDBTests(MailDBTestCase):
 
         muid3 = self.db.get_muid(msg3, update_header=True, dup_check=False,
                                  commit=False)
-        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value)
+        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value())
         self.assertNotEqual(muid, muid3)
 
         muid4 = self.db.get_muid(msg4, update_header=True, dup_check=True,
                                  commit=False)
-        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value)
+        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value())
         # muid4 should match either muid or muid3
         if muid4 != muid:
             self.assertEqual(muid4, muid3)
