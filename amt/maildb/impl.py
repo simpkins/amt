@@ -699,6 +699,15 @@ class MUID(interface.MUID):
         if protocol is sqlite3.PrepareProtocol:
             return self._value
 
+    def __eq__(self, other):
+        return isinstance(other, MUID) and self._value == other._value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self._value)
+
 
 class TUID(interface.TUID):
     def __init__(self, maildb, value):
@@ -728,3 +737,12 @@ class TUID(interface.TUID):
         assert merged_to.resolve() == merged_to
 
         return merged_to
+
+    def __eq__(self, other):
+        return isinstance(other, TUID) and self._value == other._value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self._value)
