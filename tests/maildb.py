@@ -78,14 +78,14 @@ class MailDBTestCase(unittest.TestCase):
 
 
 class MailDBTests(MailDBTestCase):
-    def test_get_muid_dup(self):
+    def test_import_dup(self):
         params = {
-            'subject': 'test_get_muid_dup()',
+            'subject': 'test_import_dup()',
             'body': 'This is a test.\n',
             'from_addr': [('Alice', 'alice@example.com')],
             'to': [('Bob', 'bob@example.com'), ('Carl', 'carl@example.com')],
             'timestamp': time.time(),
-            'message_id': '<test_get_muid_dup@example.com>',
+            'message_id': '<test_import_dup@example.com>',
         }
         msg1 = amt.message.new_message(**params)
         msg2 = amt.message.new_message(**params)
@@ -93,37 +93,51 @@ class MailDBTests(MailDBTestCase):
         msg4 = amt.message.new_message(**params)
         msg5 = amt.message.new_message(**params)
 
-        muid = self.db.get_muid(msg1, update_header=True, commit=False)
-        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value())
+        muid1, tuid1 = self.db.import_msg(msg1, update_header=True,
+                                          commit=False)
+        self.assertEqual(msg1.get('X-AMT-MUID'), muid1.value())
+        self.assertEqual(msg1.get('X-AMT-TUID'), tuid1.value())
 
-        muid2 = self.db.get_muid(msg2, update_header=False, dup_check=True,
-                                 commit=False)
+        muid2, tuid2 = self.db.import_msg(msg2, update_header=False,
+                                          dup_check=True, commit=False)
         self.assertEqual(msg2.get('X-AMT-MUID'), None)
-        self.assertEqual(muid, muid2)
+        self.assertEqual(msg2.get('X-AMT-TUID'), None)
+        self.assertEqual(muid1, muid2)
+        self.assertEqual(tuid1, tuid2)
 
-        muid3 = self.db.get_muid(msg3, update_header=True, dup_check=False,
-                                 commit=False)
+        muid3, tuid3 = self.db.import_msg(msg3, update_header=True,
+                                          dup_check=False, commit=False)
         self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value())
-        self.assertNotEqual(muid, muid3)
+        self.assertEqual(msg3.get('X-AMT-TUID'), tuid3.value())
+        self.assertNotEqual(muid1, muid3)
+        # Even though a new MUID was allocated due to dup_check=False,
+        # The same TUID should still be found.
+        self.assertEqual(tuid1, tuid3)
 
-        muid4 = self.db.get_muid(msg4, update_header=True, dup_check=True,
-                                 commit=False)
+        muid4, tuid4 = self.db.import_msg(msg4, update_header=True,
+                                          dup_check=True, commit=False)
         self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value())
+        self.assertEqual(msg4.get('X-AMT-TUID'), tuid4.value())
         # muid4 should match either muid or muid3
-        if muid4 != muid:
+        if muid4 != muid1:
             self.assertEqual(muid4, muid3)
+        self.assertEqual(tuid1, tuid4)
 
         # Change the Message-ID in msg5.
         # The dup_check code should treat it as a different message
         msg5.remove_header('Message-ID')
         msg5.add_header('Message-ID', '<another_id@example.com>')
-        muid5 = self.db.get_muid(msg5, update_header=True, dup_check=True,
-                                 commit=False)
+        muid5, tuid5 = self.db.import_msg(msg5, update_header=True,
+                                          dup_check=True, commit=False)
         self.assertEqual(msg5.get('X-AMT-MUID'), muid5.value())
-        self.assertNotEqual(muid5, muid)
+        self.assertEqual(msg5.get('X-AMT-TUID'), tuid5.value())
+        self.assertNotEqual(muid5, muid1)
         self.assertNotEqual(muid5, muid3)
+        # The thread lookup code should still find tuid1 based
+        # on the message subject and timestamp
+        self.assertEqual(tuid5, tuid1)
 
-    def test_get_muid_dup_no_message_id(self):
+    def test_import_dup_no_message_id(self):
         params = {
             'subject': 'test_get_muid_dup_no_message_id()',
             'body': 'This is a test.\n',
@@ -140,48 +154,49 @@ class MailDBTests(MailDBTestCase):
         for m in (msg1, msg2, msg3, msg4):
             m.remove_header('Message-ID')
 
-        muid = self.db.get_muid(msg1, update_header=True, commit=False)
-        self.assertEqual(msg1.get('X-AMT-MUID'), muid.value())
+        muid1, tuid1 = self.db.import_msg(msg1, update_header=True,
+                                          commit=False)
+        self.assertEqual(msg1.get('X-AMT-MUID'), muid1.value())
+        self.assertEqual(msg1.get('X-AMT-TUID'), tuid1.value())
 
-        muid2 = self.db.get_muid(msg2, update_header=False, dup_check=True,
-                                 commit=False)
+        muid2, tuid2 = self.db.import_msg(msg2, update_header=False,
+                                          dup_check=True, commit=False)
         self.assertEqual(msg2.get('X-AMT-MUID'), None)
-        self.assertEqual(muid, muid2)
-
-        muid3 = self.db.get_muid(msg3, update_header=True, dup_check=False,
-                                 commit=False)
-        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value())
-        self.assertNotEqual(muid, muid3)
-
-        muid4 = self.db.get_muid(msg4, update_header=True, dup_check=True,
-                                 commit=False)
-        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value())
-        # muid4 should match either muid or muid3
-        if muid4 != muid:
-            self.assertEqual(muid4, muid3)
-
-    def test_get_muid_with_header(self):
-        msg = self.new_message()
-        # Get an MUID for this message.
-        # This will also update the msg object to add an X-AMT-MUID header
-        muid1 = self.db.get_muid(msg, commit=False)
-        # Call get_muid() again on this same msg object
-        muid2 = self.db.get_muid(msg, commit=False)
+        self.assertEqual(msg2.get('X-AMT-TUID'), None)
         self.assertEqual(muid1, muid2)
+        self.assertEqual(tuid1, tuid2)
 
-    def test_get_tuid_with_header(self):
+        muid3, tuid3 = self.db.import_msg(msg3, update_header=True,
+                                          dup_check=False, commit=False)
+        self.assertEqual(msg3.get('X-AMT-MUID'), muid3.value())
+        self.assertEqual(msg3.get('X-AMT-TUID'), tuid3.value())
+        self.assertNotEqual(muid1, muid3)
+        self.assertEqual(tuid1, tuid3)
+
+        muid4, tuid4 = self.db.import_msg(msg4, update_header=True,
+                                          dup_check=True, commit=False)
+        self.assertEqual(msg4.get('X-AMT-MUID'), muid4.value())
+        self.assertEqual(msg4.get('X-AMT-TUID'), tuid4.value())
+        # muid4 should match either muid1 or muid3
+        if muid4 != muid1:
+            self.assertEqual(muid4, muid3)
+        self.assertEqual(tuid1, tuid4)
+
+    def test_import_with_header(self):
         msg = self.new_message()
-        muid = self.db.get_muid(msg, commit=False)
-        # Get a TUID for this message.
-        tuid1 = self.db.get_tuid(muid, msg, commit=False)
-        # This will also update the msg object to add an X-AMT-TUID header
-        # Call get_tuid() again on this same msg object
-        tuid2 = self.db.get_tuid(muid, msg, commit=False)
+        # Import this message.
+        # This will also update the msg object to add X-AMT-MUID and
+        # X-AMT-TUID headers
+        muid1, tuid1 = self.db.import_msg(msg, commit=False,
+                                          update_header=True)
+        # Call import_msg() again on this same msg object
+        muid2, tuid2 = self.db.import_msg(msg, commit=False)
+        self.assertEqual(muid1, muid2)
         self.assertEqual(tuid1, tuid2)
 
     def test_labels(self):
         msg = self.new_message()
-        muid = self.db.get_muid(msg, commit=False)
+        muid, tuid = self.db.import_msg(msg, commit=False)
 
         labels = self.db.get_labels(muid)
         self.assertEqual(labels, [])
@@ -208,8 +223,7 @@ class MailDBTests(MailDBTestCase):
 
     def test_thread_labels(self):
         msg = self.new_message()
-        muid = self.db.get_muid(msg, commit=False)
-        tuid = self.db.get_tuid(muid, msg, commit=False)
+        muid, tuid = self.db.import_msg(msg, commit=False)
 
         labels = self.db.get_thread_labels(tuid)
         self.assertEqual(labels, [])
@@ -249,10 +263,10 @@ class MailDBTests(MailDBTestCase):
         msg2.add_header(header, msg1.get_message_id())
 
         # Import msg1
-        muid1, tuid1 = self.add_msg_unique(msg1)
+        muid1, tuid1 = self.import_msg_unique(msg1)
 
         # Import msg2
-        muid2 = self.add_msg_in_thread(msg2, tuid1)
+        muid2 = self.import_msg_in_thread(msg2, tuid1)
 
     def test_get_tuid_referenced_reverse(self):
         self.run_test_get_tuid_referenced_reverse('References')
@@ -267,10 +281,10 @@ class MailDBTests(MailDBTestCase):
         msg2.add_header(header, msg1.get_message_id())
 
         # Import msg2 first
-        muid2, tuid2 = self.add_msg_unique(msg2)
+        muid2, tuid2 = self.import_msg_unique(msg2)
 
         # Import msg1
-        muid1 = self.add_msg_in_thread(msg1, tuid2)
+        muid1 = self.import_msg_in_thread(msg1, tuid2)
 
     def test_get_tuid_join_references(self):
         msg1 = self.new_message()
@@ -283,29 +297,26 @@ class MailDBTests(MailDBTestCase):
 
         # Add msg1 and msg2, which initially both appear to be from separate
         # threads.
-        muid1, tuid1 = self.add_msg_unique(msg1)
-        muid2, tuid2 = self.add_msg_unique(msg2)
+        muid1, tuid1 = self.import_msg_unique(msg1)
+        muid2, tuid2 = self.import_msg_unique(msg2)
 
         # Next add msg3.  This should join the two threads created earlier
-        muid3 = self.db.get_muid(msg3, commit=False)
-        tuid3 = self.db.get_tuid(muid3, msg3, commit=False)
+        muid3, tuid3 = self.db.import_msg(msg3, commit=False)
         if tuid3 != tuid1:
             self.assertEqual(tuid3, tuid2)
         self.check_thread_msgs(tuid1, [muid1, muid2, muid3])
         self.check_thread_msgs(tuid2, [muid1, muid2, muid3])
 
-    def add_msg_unique(self, msg):
-        muid = self.db.get_muid(msg, commit=False)
-        tuid = self.db.get_tuid(muid, msg, commit=False)
+    def import_msg_unique(self, msg):
+        muid, tuid = self.db.import_msg(msg, commit=False)
         self.add_unique_tuid(tuid)
         self.check_thread_msgs(tuid, [muid])
         return (muid, tuid)
 
-    def add_msg_in_thread(self, msg, tuid):
+    def import_msg_in_thread(self, msg, tuid):
         existing_muids = self.db.get_thread_msgs(tuid)
 
-        muid = self.db.get_muid(msg, commit=False)
-        new_tuid = self.db.get_tuid(muid, msg, commit=False)
+        muid, new_tuid = self.db.import_msg(msg, commit=False)
         self.assertEqual(new_tuid, tuid)
         self.check_thread_msgs(tuid, existing_muids + [muid])
         return muid

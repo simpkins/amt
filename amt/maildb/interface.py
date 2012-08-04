@@ -64,46 +64,36 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def get_muid(self, msg, update_header=True, dup_check=True, commit=True):
+    def import_msg(self, msg, update_header=True, dup_check=True, commit=True):
         '''
-        Get an MUID for a message.
+        Import a message into the database.
 
-        If the message already contains an X-AMT-MUID header, the existing MUID
-        is read from this header and returned.  Otherwise a new MUID is
-        allocated.
+        This obtains an MUID and TUID for the message, and indexes the message
+        contents for fast searching.
 
-        If dup_check is True, the database will look at the message contents
-        and search the DB to see if an existing MUID already exists for this
-        message.  If dup_check is False this search will be skipped, which may
-        improve performance.
+        If the message contains an X-AMT-MUID and X-AMT-TUID header, these
+        headers will be used to try and find existing MUID and TUID values for
+        the message.  Even if these headers are present, new MUID and TUID
+        values may be chosen if the header values do not look valid, or if they
+        contain MUID/TUID values that already exist in the database for
+        messages/threads that do not match this message.
 
-        If a new MUID is allocated and the update_header parameter is True, an
-        X-AMT-MUID header containing the new MUID is added to the message.
+        If the dup_check parameter is True, the code will also look for an
+        existing MUID based on the message fingerprint.
 
-        Typically you want to use import_msg() rather than calling get_muid()
-        directly.
-        '''
-        raise NotImplementedError()
+        If no existing MUID is found, a new MUID will be allocated.  The code
+        will heuristically search to tell if this message belongs to an
+        existing known thread.  If an existing thread is found, its TUID will
+        be returned.  If this message is not part of any known thread, a new
+        TUID will be allocated and returned.
 
-    def import_msg(self, msg, update_header=True, reindex=False,
-                   dup_check=True, commit=True):
-        '''
-        Get an MUID and TUID for a message, and index the message contents.
-
-        This is essentially a helper function that combines get_muid(),
-        get_tuid(), and index_msg().  The caller must still call add_location()
-        to add a Location for the message.
+        If the update_header parameter is True, the message object will be
+        updated to contain X-AMT-MUID and X-AMT-TUID headers containing the
+        returned MUID and TUID.
 
         Returns a (muid, tuid) tuple
         '''
-        muid = self.get_muid(msg, update_header=update_header,
-                             dup_check=dup_check, commit=False)
-        tuid = self.get_tuid(muid, msg, update_header=update_header,
-                             commit=False)
-        if commit:
-            self.commit()
-        self.index_msg(muid, msg, reindex=reindex)
-        return muid, tuid
+        raise NotImplementedError()
 
     def add_location(self, muid, location, commit=True):
         '''
@@ -205,17 +195,6 @@ class MailDB:
         '''
         raise NotImplementedError()
 
-    def index_msg(self, muid, msg, reindex=True):
-        '''
-        Index the contents of the message for text-based search.
-
-        If this MUID has already been indexed in the past and reindex is False,
-        index_msg will return without doing anything.  If reindex is True,
-        the old index information for this message will be thrown away and the
-        message will be re-indexed.
-        '''
-        raise NotImplementedError()
-
     def search(self, query):
         '''
         Search for messages.
@@ -233,29 +212,6 @@ class MailDB:
         Look up the messages in the specified thread.
 
         Returns a list of MUIDs.
-        '''
-        raise NotImplementedError()
-
-    def get_tuid(self, muid, msg, update_header=True, commit=True):
-        '''
-        Get the TUID for a message.
-
-        If this message already has a TUID assigned in the MailDB, that TUID is
-        returned.  Otherwise, if the message contains an X-AMT-TUID header, the
-        existing TUID is read from this header and returned.
-
-        If no existing TUID is found, this function heuristically attempts to
-        determine if this message belongs to an existing known thread.  If so,
-        the TUID for that thread is returned.  If the message is not part of
-        any known thread, a new TUID is allocated and returned.
-
-        If the update_header parameter is true, the message headers are updated
-        with an X-AMT-TUID header storing the assigned TUID.
-
-        Note that an existing X-AMT-TUID header may be replaced in cases where
-        the MailDB contains a newer TUID for this message (in cases where
-        threads have been merged or split since the original X-AMT-TUID header
-        was stored).
         '''
         raise NotImplementedError()
 

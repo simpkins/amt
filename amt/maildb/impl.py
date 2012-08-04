@@ -89,16 +89,19 @@ class MailDB(interface.MailDB):
 
         db.execute('CREATE TABLE messages ('
                    'muid INTEGER PRIMARY KEY AUTOINCREMENT, '
+                   'tuid INTEGER, '
                    'message_id BLOB, subject BLOB, '
                    'timestamp DATETIME, fingerprint BLOB)')
         db.execute('CREATE INDEX messages_by_message_id '
                    'ON messages (message_id)')
         db.execute('CREATE INDEX messages_by_fingerprint '
                    'ON messages (fingerprint)')
+        db.execute('CREATE INDEX thread_msgs ON messages (tuid)')
 
         db.execute('CREATE TABLE msg_locations ('
-                   'muid INTEGER PRIMARY KEY, location BLOB, '
+                   'muid INTEGER, location BLOB, '
                    'UNIQUE (location))')
+        db.execute('CREATE INDEX locations_by_muid ON msg_locations (muid)')
         db.execute('CREATE INDEX muids_by_location ON msg_locations '
                    '(location)')
 
@@ -114,11 +117,6 @@ class MailDB(interface.MailDB):
         db.execute('CREATE INDEX labels_by_tuid ON thread_labels (tuid)')
         db.execute('CREATE INDEX threads_by_label ON thread_labels (label)')
 
-        db.execute('CREATE TABLE msg_thread ('
-                   'muid INTEGER PRIMARY KEY, tuid INTEGER, '
-                   'UNIQUE (muid, tuid) ON CONFLICT IGNORE)')
-        db.execute('CREATE INDEX thread_msgs ON msg_thread (tuid)')
-
         db.execute('CREATE TABLE message_ids_to_thread '
                    '(message_id BLOB, tuid INTEGER)')
         db.execute('CREATE INDEX message_ids_to_thread_by_msg_id '
@@ -131,15 +129,10 @@ class MailDB(interface.MailDB):
         db.execute('CREATE INDEX merged_threads_by_to '
                    'ON merged_threads (merged_to)')
 
-        # The 'automatic' field records if this thread was automatically
-        # created by get_tuid(), or was manually created by the user explicitly
-        # splitting threads.  This is used to prevent the code from
-        # automatically re-merging threads that had been explicitly split.
         db.execute('CREATE TABLE threads ('
                    'tuid INTEGER PRIMARY KEY AUTOINCREMENT, '
                    'subject STRING, '
-                   'start_time INTEGER, end_time INTEGER, '
-                   'automatic BOOLEAN)')
+                   'start_time INTEGER, end_time INTEGER)')
         db.execute('CREATE INDEX thread_subjects ON threads (subject)')
 
         random_data = os.urandom(6)
@@ -259,203 +252,283 @@ class MailDB(interface.MailDB):
     def get_thread_msgs(self, tuid):
         assert isinstance(tuid, TUID)
         tuid = tuid.resolve()
-        cursor = self.db.execute('SELECT muid FROM msg_thread '
+        cursor = self.db.execute('SELECT muid FROM messages '
                                  'WHERE tuid = ?', (tuid,))
         return [self._create_muid(entry[0]) for entry in cursor]
 
     @committable
-    def get_muid(self, msg, update_header=True, dup_check=True):
-        muid_hdr = msg.get(MUID_HEADER)
-        if muid_hdr is not None:
-            return self._handle_existing_muid_header(muid_hdr, msg)
+    def import_msg(self, msg, update_header=True, dup_check=True):
+        muid, tuid = self._get_muid_tuid(msg, dup_check=dup_check)
+        assert isinstance(muid, MUID)
+        assert isinstance(tuid, TUID)
 
-        muid = None
-        fingerprint = None
-        if dup_check:
-            fingerprint = msg.fingerprint()
-            muid = self._search_for_existing_muid(msg, fingerprint)
-
-        if muid is None:
-            muid = self._allocate_muid(msg, fingerprint)
+        # TODO: index the message
 
         if update_header:
+            msg.remove_header(MUID_HEADER)
+            msg.remove_header(TUID_HEADER)
             msg.add_header(MUID_HEADER, muid.value())
+            msg.add_header(TUID_HEADER, tuid.value())
 
-        return muid
+        return muid, tuid
+
+    def _get_muid_tuid(self, msg, dup_check=True):
+        muid = None
+        tuid = None
+
+        muid_hdr = msg.get(MUID_HEADER)
+        if muid_hdr is not None:
+            muid, tuid = self._handle_existing_muid_header(muid_hdr, msg)
+        if muid is not None:
+            assert tuid is not None
+            return muid, tuid
+
+        fingerprint = None
+        if dup_check:
+            fingerprint = msg.binary_fingerprint()
+            muid, tuid = self._search_for_existing_muid(msg, fingerprint)
+        if muid is not None:
+            assert tuid is not None
+            return muid, tuid
+
+        # We don't have an existing MUID for this message, so we need to
+        # create a new entry.
+        assert tuid is None
+        return self._insert_message(msg, fingerprint=fingerprint)
 
     def _handle_existing_muid_header(self, muid_hdr, msg):
         # Convert this into an internal ID.
         try:
             muid = self._parse_muid(muid_hdr)
         except BadMUIDError:
-            # FIXME: handle the error
-            raise
-
-        msg_id = msg.get_message_id()
-        timestamp = int(msg.timestamp)
+            # This doesn't look like a valid MUID for this MailDB.
+            # Just ignore it.
+            return None, None
 
         cursor = self.db.execute(
-            'SELECT message_id, subject, timestamp, fingerprint '
+            'SELECT tuid, message_id, subject, timestamp, fingerprint '
             'FROM messages WHERE muid = ?',
             (muid,))
         results = list(cursor)
         if not results:
             # Hmm.  The message has a MUID we don't know about.
             # Maybe someone is rebuilding the database?
-            # Just add this entry.
-            self.db.execute('INSERT INTO messages '
-                            '(muid, message_id, subject, timestamp, '
-                            'fingerprint) '
-                            'VALUES (?, ?, ?, ?)',
-                            (muid, msg.subject, timestamp, msg.fingerprint()))
-            return muid
+            return self._handle_unknown_existing_muid(muid, msg)
 
-        # Log a warning if this message doesn't look like the information
-        # already in the DB.
         assert(len(results) == 1)
         entry = results[0]
-        if (msg_id != entry[0] or msg.subject != entry[1] or
-            timestamp != entry[2]):
-            self._log.warning('found existing MUID header on message, '
-                              'but does not match information in DB: '
-                              'existing Message-ID: "%s", '
-                              'new Message-ID: "%s"; '
-                              'existing Subject: "%s", new Subject: "%s"; '
-                              'existing timestamp: %s, new timestamp: %s',
-                              msg_id, entry[0], msg.subject, entry[1],
-                              timestamp, entry[2])
 
-        return muid
+        db_tuid = self._create_tuid(entry[0])
+        db_fingerprint = entry[4]
+        msg_fingerprint = msg.binary_fingerprint()
+        if db_fingerprint == msg_fingerprint:
+            # This message matches the information we have stored in the
+            # database.
+            return muid, db_tuid
+
+        # The MUID stored in the header does not look like the message
+        # in the database.
+        db_msg_id = entry[1]
+        db_subject = entry[2]
+        db_timestamp = entry[3]
+
+        msg_id = msg.get_message_id()
+        msg_timestamp = int(msg.timestamp)
+
+        db_fingerprint_b64 = base64.b64encode(db_fingerprint)
+        msg_fingerprint_b64 = base64.b64encode(msg_fingerprint)
+
+        self._log.warning('found existing MUID header on message, '
+                          'but does not match information in DB: '
+                          'MUID: %s, '
+                          'DB Message-ID: "%s", '
+                          'new Message-ID: "%s"; '
+                          'DB Subject: "%s", new Subject: "%s"; '
+                          'DB timestamp: %s, new timestamp: %s; '
+                          'DB fingerprint: %s, new fingerpring: %s',
+                          muid, db_msg_id, msg.get_message_id(),
+                          db_subject, msg.subject, db_timestamp, msg_timestamp,
+                          db_fingerprint_b64, msg_fingerprint_b64)
+
+        # TODO: If the Subject and Message-ID match, perhaps we should just
+        # use this MUID and TUID even though the fingerprint doesn't fully
+        # match?
+        #
+        # For now, just return None, None so our caller will continue
+        # with the normal MUID allocation code, as if the MUID header
+        # wasn't present.
+        return None, None
+
+    def _handle_unknown_existing_muid(self, muid, msg):
+        # Look for a TUID header in the message
+        hdr_tuid = None
+        tuid_hdr_value = msg.get(MUID_HEADER)
+        if tuid_hdr_value is not None:
+            try:
+                tuid_from_hdr = self._parse_tuid(tuid_hdr_value)
+            except BadTUIDError:
+                # This doesn't look like a valid TUID for this MailDB.
+                # Just ignore it.
+                pass
+
+        if hdr_tuid is None:
+            # No existing TUID.  Just call _insert_message() and let
+            # it find an appropriate TUID to use.
+            return self._insert_message(msg, muid=muid)
+
+        msg_subject_root = msg.get_subject_stem()
+
+        # Look to see if hdr_tuid exists in the DB.  If so, check to see
+        # if the thread information matches the TUID in the DB.
+        cursor = self.db.execute('SELECT subject FROM threads '
+                                 'WHERE tuid = ?',
+                                 (hdr_tuid,))
+        results = list(cursor)
+        if not results:
+            hdr_tuid_known = False
+            hdr_tuid_match = False
+        else:
+            assert len(results) == 1
+            hdr_tuid_known = True
+            existing_subject = results[0][0]
+            hdr_tuid_match = (existing_subject == msg_subject_root)
+
+        # If the header TUID already exists in the database, and the thread
+        # subject matches, use this TUID, even if it isn't the one we would
+        # have picked in the absence of the header.
+        if hdr_tuid_known and hdr_tuid_match:
+            return self._insert_message(msg, muid=muid, tuid=tuid)
+
+        # If the header TUID exists in the database but isn't a match, ignore
+        # it.  (This can happen if we are rebuilding the database, but messages
+        # were imported in a different order, so the new TUID values don't
+        # match.)
+        #
+        # Let _insert_message() pick an appropriate TUID to use
+        if hdr_tuid_known and not hdr_tuid_match:
+            return self._insert_message(msg, muid=muid)
+
+        # If we are still here, hdr_tuid doesn't exist in the database
+        assert not hdr_tuid_known
+
+        # Perform the normal TUID search to find a TUID for this message
+        # Do this before adding hdr_tuid to the threads table,
+        # so we won't find hdr_tuid
+        db_tuid = self._search_for_tuid(msg, allocate=False)
+        assert db_tuid != hdr_tuid
+
+        # If we found an existing match, use that TUID, and add an entry
+        # to the database indicating that hdr_tuid has been merged into
+        # db_tuid.
+        if db_tuid is not None:
+            # Add hdr_tuid to the threads table
+            self._allocate_tuid(msg, subject_root=msg_subject_root,
+                                tuid=hdr_tuid)
+            # Indicate that hdr_tuid is merged into db_tuid
+            self.db.execute('INSERT INTO merged_threads '
+                            '(merged_from, merged_to) VALUES (?, ?)',
+                            (hdr_tuid, db_tuid))
+            return self._insert_message(msg, muid=muid, tuid=db_tuid)
+
+        # No existing match found.  Add hdr_tuid to the database,
+        # and use it.
+        self._allocate_tuid(msg, subject_root=msg_subject_root, tuid=hdr_tuid)
+        return self._insert_message(msg, muid=muid, tuid=hdr_tuid)
 
     def _search_for_existing_muid(self, msg, fingerprint=None):
         if fingerprint is None:
-            fingerprint = msg.fingerprint()
+            fingerprint = msg.binary_fingerprint()
         cursor = self.db.execute(
-            'SELECT muid, message_id, subject, timestamp '
+            'SELECT muid, tuid, message_id, subject, timestamp '
             'FROM messages WHERE fingerprint = ?',
             (fingerprint,))
         results = list(cursor)
         if not results:
-            return None
+            return None, None
 
-        # TODO: We probably should store some sort of message fingerprint
-        # in the messages table, and check that for equality.
-        # This would be especially useful for messages with no Message-ID
-        # header.
+        # In case there were multiple matches, just pick the first one
+        # with a matching timestamp.  If there are no matching timestamps,
+        # Just use the first entry anyway.
+        # (Other matching entries are possibly just duplicates somehow.)
+        best_match = results[0]
+        if len(results) > 1:
+            timestamp = int(msg.timestamp)
+            for entry in results:
+                if entry[4] == timestamp:
+                    best_match = entry
+                    break
 
-        # If we have a location for the existing MUID, should we perhaps check
-        # the body contents?
-        if len(results) == 1:
-            entry = results[0]
-            return self._create_muid(entry[0])
+        muid = self._create_muid(best_match[0])
+        tuid = self._create_tuid(best_match[1])
+        return muid, tuid
 
-        # Multiple matches.  Just return the first one whose timestamp matches.
-        # (These are quite possibly just duplicate entries of each other.)
-        timestamp = int(msg.timestamp)
-        for entry in results:
-            if entry[3] == timestamp:
-                return self._create_muid(entry[0])
-
-        return None
-
-    def _allocate_muid(self, msg, fingerprint=None):
+    def _insert_message(self, msg, muid=None, tuid=None, fingerprint=None):
         msg_id = msg.get_message_id()
         timestamp = int(msg.timestamp)
 
         if fingerprint is None:
-            fingerprint = msg.fingerprint()
+            fingerprint = msg.binary_fingerprint()
 
-        cursor = self.db.execute(
-            'INSERT INTO messages '
-            '(message_id, subject, timestamp, fingerprint) '
-            'VALUES (?, ?, ?, ?)',
-            (msg_id, msg.subject, timestamp, fingerprint))
-        return self._create_muid(cursor.lastrowid)
+        if tuid is None:
+            # Find a TUID for the message, and allocate a new TUID if
+            # necessary.
+            tuid = self._search_for_tuid(msg, allocate=True)
+        assert isinstance(tuid, TUID)
 
-    @committable
-    def get_tuid(self, muid, msg, update_header=True):
-        assert isinstance(muid, MUID)
-        tuid = self._pick_tuid(muid, msg)
+        # Insert the message into the messages table
+        if muid is None:
+            cursor = self.db.execute(
+                'INSERT INTO messages '
+                '(tuid, message_id, subject, timestamp, fingerprint) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (tuid, msg_id, msg.subject, timestamp, fingerprint))
+            muid = self._create_muid(cursor.lastrowid)
+        else:
+            cursor = self.db.execute(
+                'INSERT INTO messages '
+                '(muid, tuid, message_id, subject, timestamp, fingerprint) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (muid, tuid, msg_id, msg.subject, timestamp, fingerprint))
 
-        # Store the fact that this message belongs to this thread.
-        # Store the MUID <--> TUID mapping
-        self.db.execute('INSERT INTO msg_thread (muid, tuid) VALUES (?, ?)',
-                        (muid, tuid))
-
-        # Store the Message-ID <--> TUID mapping
+        # Insert the Message-ID and all IDs referenced by this message
+        # into the message_ids_to_thread table
+        msg_ids = msg.get_referenced_ids()
         msg_id = msg.get_message_id()
         if msg_id is not None:
-            self.db.execute('INSERT INTO message_ids_to_thread '
-                            '(message_id, tuid) VALUES (?, ?)',
-                            (msg_id, tuid))
-
-        # Process the References and In-Reply-To headers from this message, and
-        # store the fact that these Message-IDs belong to this thread.
-        referenced_ids = msg.get_referenced_ids()
+            msg_ids.append(msg_id)
         self.db.executemany('INSERT INTO message_ids_to_thread '
                             '(message_id, tuid) VALUES (?, ?)',
                             ((msg_id, tuid)
-                             for msg_id in referenced_ids))
+                             for msg_id in msg_ids))
 
-        if update_header:
-            msg.add_header(TUID_HEADER, tuid.value())
+        return muid, tuid
 
-        return tuid
-
-    def _pick_tuid(self, muid, msg):
-        # Check to see if this message has a TUID header
-        tuid_hdr = msg.get(TUID_HEADER)
-        if tuid_hdr is not None:
-            return self._handle_existing_tuid_header(muid, msg, tuid_hdr)
-
-        # Check to see if the database already contains a TUID for this MUID
-        int_tuid = self._search_for_tuid_by_muid(muid, msg)
-        if int_tuid is not None:
-            return int_tuid
-
+    def _search_for_tuid(self, msg, allocate):
         # Search for a TUID by Message-ID
-        int_tuid = self._search_for_tuid_by_message_id(muid, msg)
-        if int_tuid is not None:
-            return int_tuid
+        tuid = self._search_for_tuid_by_message_id(msg)
+        if tuid is not None:
+            return tuid
 
         # Search for a TUID by the Thread-Index header
-        int_tuid = self._search_for_tuid_by_thread_index(muid, msg)
-        if int_tuid is not None:
-            return int_tuid
+        tuid = self._search_for_tuid_by_thread_index(msg)
+        if tuid is not None:
+            return tuid
 
         # Search for a TUID by Subject
         subject_root = msg.get_subject_stem()
-        int_tuid = self._search_for_tuid_by_subject(muid, msg, subject_root)
-        if int_tuid is not None:
-            return int_tuid
+        tuid = self._search_for_tuid_by_subject(msg, subject_root)
+        if tuid is not None:
+            return tuid
 
-        # We didn't find any existing TUID.  Allocate a new one.
-        return self._allocate_tuid(msg, subject_root)
+        # No existing TUID found
+        if allocate:
+            # No known thread looks like a good match for this message.
+            # Allocate a new TUID.
+            return self._allocate_tuid(msg, subject_root=subject_root)
+        else:
+            return None
 
-    def _handle_existing_tuid_header(self, muid, msg, tuid_hdr):
-        # Convert this into an internal ID.
-        try:
-            tuid = self._parse_tuid(tuid_hdr)
-        except BadMUIDError:
-            # FIXME: handle the error
-            raise
-
-        # FIXME Make sure this TUID is present in the DB, and add it if not
-        raise NotImplementedError()
-        return tuid
-
-    def _search_for_tuid_by_muid(self, muid, msg):
-        # Check to see if this MUID already has a known thread
-        c = self.db.execute('SELECT tuid FROM msg_thread WHERE muid = ?',
-                            (muid,))
-        results = list(c)
-        if results:
-            assert len(results) == 1
-            return self._create_tuid(results[0][0])
-
-        return None
-
-    def _search_for_tuid_by_message_id(self, muid, msg):
+    def _search_for_tuid_by_message_id(self, msg):
         # Search for any of the Message-IDs listed in the Message-ID,
         # References, or In-Reply-To header.
         msg_ids = []
@@ -506,7 +579,7 @@ class MailDB(interface.MailDB):
                               tuid2, tuid1, real_tuid2)
 
         # Change all of the messages in tuid2 to point to tuid1
-        self.db.execute('UPDATE msg_thread '
+        self.db.execute('UPDATE messages '
                         'SET tuid = ? WHERE tuid = ?',
                         (tuid1, tuid2))
         self.db.execute('UPDATE message_ids_to_thread '
@@ -526,18 +599,17 @@ class MailDB(interface.MailDB):
 
         return tuid1
 
-    def _search_for_tuid_by_thread_index(self, muid, msg):
+    def _search_for_tuid_by_thread_index(self, msg):
         # TODO: Use the Thread-Index header
         return None
 
-    def _search_for_tuid_by_subject(self, muid, msg, subject_root):
+    def _search_for_tuid_by_subject(self, msg, subject_root):
         # Search for threads with similar subjects
         # Only treat them as the same thread if they are close enough together
         # in time.  This new message may be close enough in time to multiple
         # existing TUIDs, in which case we should probably merge them (unless
         # they were explicitly separated before...)
-        cursor = self.db.execute('SELECT '
-                                 'tuid, start_time, end_time, automatic '
+        cursor = self.db.execute('SELECT tuid, start_time, end_time '
                                  'FROM threads WHERE subject = ?',
                                  (subject_root,))
 
@@ -545,35 +617,43 @@ class MailDB(interface.MailDB):
         threshold = 60*60*24*7
         timestamp = int(msg.timestamp)
 
-        for_consideration = []
+        matching_tuids = []
         for match in cursor:
-            tuid_value, start_time, end_time, automatic = match
+            tuid_value, start_time, end_time = match
             if (start_time - threshold) <= timestamp <= (end_time + threshold):
                 tuid = self._create_tuid(tuid_value)
-                for_consideration.append((tuid, automatic))
+                matching_tuids.append(tuid)
 
-        if not for_consideration:
+        if not matching_tuids:
             return None
-        if len(for_consideration) == 1:
-            return for_consideration[0][0]
+        if len(matching_tuids) == 1:
+            return matching_tuids[0]
 
         # We have multiple matches.  We should merge these threads together,
         # unless they were explicitly separated.
         #
         # FIXME: don't merge explicitly split threads
-        tuids = [tuid for tuid, automatic in for_consideration]
-        return self.merged_threads(*tuids)
+        return self.merged_threads(*matching_tuids)
 
-    def _allocate_tuid(self, msg, subject_root=None):
+    def _allocate_tuid(self, msg, subject_root=None, tuid=None):
         if subject_root is None:
             subject_root = msg.get_subject_stem()
 
         timestamp = int(msg.timestamp)
-        c = self.db.execute('INSERT INTO threads '
-                            '(subject, start_time, end_time, automatic) '
+        if tuid is None:
+            c = self.db.execute('INSERT INTO threads '
+                                '(subject, start_time, end_time) '
+                                'VALUES (?, ?, ?)',
+                                (subject_root, timestamp, timestamp))
+            tuid = self._create_tuid(c.lastrowid)
+        else:
+            assert isinstance(tuid, TUID)
+            self.db.execute('INSERT INTO threads '
+                            '(tuid, subject, start_time, end_time) '
                             'VALUES (?, ?, ?, ?)',
-                            (subject_root, timestamp, timestamp, True))
-        return self._create_tuid(c.lastrowid)
+                            (tuid, subject_root, timestamp, timestamp))
+
+        return tuid
 
     def _create_muid(self, internal_id):
         '''
