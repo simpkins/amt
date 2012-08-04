@@ -4,6 +4,7 @@
 #
 import argparse
 import sys
+import time
 
 import amt.config
 from amt.maildb import MailDB
@@ -18,8 +19,11 @@ def main():
     if not args.maildb:
         args.maildb = amt.config.default_maildb_path()
 
+    print('Initializing maildb at %s...' % (args.maildb,))
+    start = time.time()
     MailDB.create_db(args.maildb)
-    print('Successfully initialized maildb at %s' % (args.maildb,))
+    end = time.time()
+    print('Initialized maildb in %.2f seconds' % (end - start,))
 
 
 if __name__ == '__main__':

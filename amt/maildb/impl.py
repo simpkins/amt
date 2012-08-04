@@ -35,7 +35,7 @@ class MailDB(interface.MailDB):
         self._log = logging.getLogger('amt.maildb')
 
         sqlite_path = os.path.join(path, 'maildb.sqlite')
-        self.db = sqlite3.connect(sqlite_path)
+        self.db = sqlite3.connect(sqlite_path, isolation_level='DEFERRED')
 
         uid_prefix = self.get_config_value('uid_prefix').decode('ASCII')
         self.muid_prefix = uid_prefix + '_M'
@@ -77,8 +77,13 @@ class MailDB(interface.MailDB):
     @classmethod
     def init_sqlite_db(cls, path):
         sqlite_path = os.path.join(path, 'maildb.sqlite')
-        db = sqlite3.connect(sqlite_path)
 
+        # Set the isolation_level to None.
+        # Otherwise the python sqlite3 module will commit before each
+        # CREATE TABLE statement, which makes things slow.
+        db = sqlite3.connect(sqlite_path, isolation_level=None)
+
+        db.execute('BEGIN EXCLUSIVE TRANSACTION')
         db.execute('CREATE TABLE metadata '
                    '(key TEXT PRIMARY KEY ON CONFLICT REPLACE, value TEXT)')
 
