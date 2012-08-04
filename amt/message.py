@@ -339,14 +339,14 @@ class Message:
                        self.get_header('Message-ID')):
             if header is None:
                 continue
-            encoded = header.encode()[:40].encode('ascii', 'surrogateescape')
+            encoded = header.encode()[:40].encode('utf-8', 'surrogateescape')
             h.update(encoded)
 
         # Hash the first 40 bytes of the first body part
         for part in self.iter_body_msgs():
             payload = part.get_payload(decode=False)
             if isinstance(payload, str):
-                payload = payload.encode('ascii', 'surrogateescape')
+                payload = payload.encode('utf-8', 'surrogateescape')
             h.update(payload[:40])
             break
 
