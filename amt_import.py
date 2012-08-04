@@ -27,20 +27,22 @@ def main():
 
     for key, path in maildir.list():
         loc = MaildirLocation(path)
+        print(loc)
         try:
             muid = mdb.get_muid_by_location(loc)
             # We've already imported this message
+            print('  --> already imported')
             continue
         except KeyError:
             # This message doesn't exist.  Fall through and import it
             pass
 
-        print(loc)
         msg = Message.from_maildir(path)
 
-        # TODO: Only commit every 10 messages or so
+        # TODO: Only commit every 10 messages or so, for performance
         commit = True
-        mdb.import_msg(msg, commit=commit)
+        muid, tuid = mdb.import_msg(msg, commit=False)
+        mdb.add_location(muid, loc, commit=commit)
 
 
 if __name__ == '__main__':

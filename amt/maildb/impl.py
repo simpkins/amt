@@ -92,9 +92,10 @@ class MailDB(interface.MailDB):
                    'ON messages (fingerprint)')
 
         db.execute('CREATE TABLE msg_locations ('
-                   'muid INTEGER, location BLOB, '
-                   'UNIQUE (muid, location) ON CONFLICT IGNORE)')
-        db.execute('CREATE INDEX locations_by_muid ON msg_locations (muid)')
+                   'muid INTEGER PRIMARY KEY, location BLOB, '
+                   'UNIQUE (location))')
+        db.execute('CREATE INDEX muids_by_location ON msg_locations '
+                   '(location)')
 
         db.execute('CREATE TABLE msg_labels ('
                    'muid INTEGER, label TEXT, automatic BOOLEAN, '
@@ -161,7 +162,7 @@ class MailDB(interface.MailDB):
     def add_location(self, muid, location):
         assert isinstance(muid, MUID)
         self.db.execute('INSERT INTO msg_locations VALUES (?, ?)',
-                        (muid, location))
+                        (muid, location.serialize()))
 
     @committable
     def remove_location(self, muid, location):
@@ -175,6 +176,15 @@ class MailDB(interface.MailDB):
         cursor = self.db.execute('SELECT location FROM msg_locations '
                                  'WHERE muid = ?', (muid,))
         return [Location.deserialize(entry[0]) for entry in cursor]
+
+    def get_muid_by_location(self, loc):
+        cursor = self.db.execute('SELECT muid FROM msg_locations '
+                                 'WHERE location = ?', (loc.serialize(),))
+        results = [self._create_muid(entry[0]) for entry in cursor]
+        if not results:
+            raise KeyError(loc)
+        assert len(results) == 1
+        return results[0]
 
     @committable
     def add_labels(self, muid, labels, automatic=False):
@@ -234,7 +244,9 @@ class MailDB(interface.MailDB):
 
     def index_msg(self, muid, msg, reindex=True):
         assert isinstance(muid, MUID)
-        raise NotImplementedError()
+
+        # FIXME: implement indexing
+        pass
 
     def search(self, query):
         raise NotImplementedError()
@@ -278,8 +290,9 @@ class MailDB(interface.MailDB):
         timestamp = int(msg.timestamp)
 
         cursor = self.db.execute(
-            'SELECT (message_id, subject, timestamp, fingerprint) '
-            'FROM messages WHERE muid = intid')
+            'SELECT message_id, subject, timestamp, fingerprint '
+            'FROM messages WHERE muid = ?',
+            (muid,))
         results = list(cursor)
         if not results:
             # Hmm.  The message has a MUID we don't know about.
@@ -532,7 +545,7 @@ class MailDB(interface.MailDB):
             tuid_value, start_time, end_time, automatic = match
             if (start_time - threshold) <= timestamp <= (end_time + threshold):
                 tuid = self._create_tuid(tuid_value)
-                for_consideration.append(tuid, automatic)
+                for_consideration.append((tuid, automatic))
 
         if not for_consideration:
             return None
@@ -569,7 +582,7 @@ class MailDB(interface.MailDB):
         '''
         if not value.startswith(self.muid_prefix):
             raise BadMUIDError(value, 'must start with "%s"', self.muid_prefix)
-        id_suffix = value[len(prefix):]
+        id_suffix = value[len(self.muid_prefix):]
         return MUID(self, int(id_suffix))
 
     def _create_tuid(self, internal_id):
@@ -584,7 +597,7 @@ class MailDB(interface.MailDB):
         '''
         if not value.startswith(self.tuid_prefix):
             raise BadTUIDError(value, 'must start with "%s"', self.tuid_prefix)
-        id_suffix = value[len(prefix):]
+        id_suffix = value[len(self.tuid_prefix):]
         return TUID(self, int(id_suffix))
 
 

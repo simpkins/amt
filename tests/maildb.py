@@ -85,7 +85,7 @@ class MailDBTests(MailDBTestCase):
             'from_addr': [('Alice', 'alice@example.com')],
             'to': [('Bob', 'bob@example.com'), ('Carl', 'carl@example.com')],
             'timestamp': time.time(),
-            'message_id': '<msg1234@example.com>',
+            'message_id': '<test_get_muid_dup@example.com>',
         }
         msg1 = amt.message.new_message(**params)
         msg2 = amt.message.new_message(**params)
@@ -159,6 +159,25 @@ class MailDBTests(MailDBTestCase):
         # muid4 should match either muid or muid3
         if muid4 != muid:
             self.assertEqual(muid4, muid3)
+
+    def test_get_muid_with_header(self):
+        msg = self.new_message()
+        # Get an MUID for this message.
+        # This will also update the msg object to add an X-AMT-MUID header
+        muid1 = self.db.get_muid(msg, commit=False)
+        # Call get_muid() again on this same msg object
+        muid2 = self.db.get_muid(msg, commit=False)
+        self.assertEqual(muid1, muid2)
+
+    def test_get_tuid_with_header(self):
+        msg = self.new_message()
+        muid = self.db.get_muid(msg, commit=False)
+        # Get a TUID for this message.
+        tuid1 = self.db.get_tuid(muid, msg, commit=False)
+        # This will also update the msg object to add an X-AMT-TUID header
+        # Call get_tuid() again on this same msg object
+        tuid2 = self.db.get_tuid(muid, msg, commit=False)
+        self.assertEqual(tuid1, tuid2)
 
     def test_labels(self):
         msg = self.new_message()
@@ -293,6 +312,24 @@ class MailDBTests(MailDBTestCase):
 
     def check_thread_msgs(self, tuid, muids):
         self.assertEqual(set(self.db.get_thread_msgs(tuid)), set(muids))
+
+    def test_import_dup_msg(self):
+        '''
+        Test calling import_msg() with the same message contents.
+        '''
+        params = {
+            'subject': 'test_import_dup_msg()',
+            'body': 'This is a test.\n',
+            'from_addr': [('Alice', 'alice@example.com')],
+            'to': [('Bob', 'bob@example.com'), ('Carl', 'carl@example.com')],
+            'timestamp': time.time(),
+            'message_id': '<test_import_dup_msg@example.com>',
+        }
+        msg1 = amt.message.new_message(**params)
+        msg2 = self.new_message()
+
+        self.db.import_msg(msg1)
+        self.db.import_msg(msg2)
 
     def test_maildir_location(self):
         path = '/some/absolute/path/cur/1338336555.2745_2947.foo:2,S'

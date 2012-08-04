@@ -9,6 +9,7 @@ import email.message
 import email.parser
 import email.utils
 import hashlib
+import os
 import re
 import time
 

@@ -130,6 +130,15 @@ class MailDB:
         '''
         raise NotImplementedError()
 
+    def get_muid_by_location(self, loc):
+        '''
+        Look up the MUID for the message at the specified location.
+
+        Returns the MUID if this location exists in the database,
+        or raises a KeyError otherwise.
+        '''
+        raise NotImplementedError()
+
     def get_msgs_by_mailbox(self, mailbox):
         '''
         Get all known message locations in the specified mailbox.
