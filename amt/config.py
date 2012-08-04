@@ -4,6 +4,7 @@
 #
 import imp
 import os
+import pwd
 
 from . import getpassword
 
@@ -55,3 +56,17 @@ def get_password_keyring(account=None, server=None, user=None,
         port = account.port
     return getpassword.get_password(user=user, server=server,
                                     port=port, protocol=protocol)
+
+
+def get_home_dir():
+    home_dir = os.environ.get('HOME')
+    if home_dir is not None:
+        return home_dir
+
+    uid = os.geteuid()
+    pwent = pwd.getpwuid(uid)
+    return pwent.pw_dir
+
+
+def default_maildb_path():
+    return os.path.join(get_home_dir(), '.maildb')
