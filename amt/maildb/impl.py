@@ -604,6 +604,17 @@ class MailDB(interface.MailDB):
         return None
 
     def _search_for_tuid_by_subject(self, msg, subject_root):
+        # FIXME: We need to keep track of whether or not we have seen
+        # the "root message" for each thread.  We should never merge together
+        # two threads that both have the same root.  When looking just by
+        # subject, we should treat the message as the root if the subject
+        # is the same as the subject_root.
+        #
+        # In other words, allow two messages to be part of the same thread
+        # if at least one of them has a subject of "Re: foo".  However, if both
+        # subjects are just "foo", we should still treat them as separate
+        # threads.
+
         # Search for threads with similar subjects
         # Only treat them as the same thread if they are close enough together
         # in time.  This new message may be close enough in time to multiple
