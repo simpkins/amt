@@ -14,7 +14,7 @@ class Location(interface.Location):
     def deserialize(cls, data):
         if data.startswith(MaildirLocation.SERIALIZE_PREFIX):
             rest = data[len(MaildirLocation.SERIALIZE_PREFIX):]
-            return MaildirLocation.deserialize_suffix(data)
+            return MaildirLocation.deserialize_suffix(rest)
 
         raise MailDBError('unknown serialized location format: %r', data)
 
@@ -22,6 +22,9 @@ class Location(interface.Location):
         raise NotImplementedError()
 
 
+# TODO: We should probably have the Mailbox location be broken out separately.
+# TODO: We should support relative locations, where the MailDB contians a root
+# path, and the Mailbox is relative to the MailDB root.
 class MaildirLocation(Location):
     SERIALIZE_PREFIX = b'MAILDIR:'
 
@@ -35,4 +38,21 @@ class MaildirLocation(Location):
 
     def serialize(self):
         data = self.path.encode('utf-8', errors='surrogateescape')
-        return b'MAILDIR: ' + data
+        return self.SERIALIZE_PREFIX + data
+
+    def __str__(self):
+        return self.path
+
+    def __repr__(self):
+        return 'MaildirLocation(%r)' % (self.path,)
+
+    def __eq__(self, other):
+        if not isinstance(other, MaildirLocation):
+            return False
+        return self.path == other.path
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.path)

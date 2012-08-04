@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-from amt.maildb import MailDB
+from amt.maildb import MailDB, Location, MaildirLocation
 import amt.message
 
 
@@ -293,3 +293,16 @@ class MailDBTests(MailDBTestCase):
 
     def check_thread_msgs(self, tuid, muids):
         self.assertEqual(set(self.db.get_thread_msgs(tuid)), set(muids))
+
+    def test_maildir_location(self):
+        path = '/some/absolute/path/cur/1338336555.2745_2947.foo:2,S'
+        loc1 = MaildirLocation(path)
+        ser1 = loc1.serialize()
+
+        loc2 = MaildirLocation(path)
+        ser2 = loc1.serialize()
+        self.assertEqual(loc1, loc2)
+        self.assertEqual(ser1, ser2)
+
+        loc3 = Location.deserialize(ser1)
+        self.assertEqual(loc1, loc3)
