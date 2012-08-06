@@ -178,7 +178,7 @@ class MailDB(interface.MailDB):
     def get_muid_by_location(self, loc):
         cursor = self.db.execute('SELECT muid FROM msg_locations '
                                  'WHERE location = ?', (loc.serialize(),))
-        results = [self._create_muid(entry[0]) for entry in cursor]
+        results = [self._muid_from_db(entry[0]) for entry in cursor]
         if not results:
             raise KeyError(loc)
         assert len(results) == 1
@@ -254,7 +254,7 @@ class MailDB(interface.MailDB):
         tuid = tuid.resolve()
         cursor = self.db.execute('SELECT muid FROM messages '
                                  'WHERE tuid = ?', (tuid,))
-        return [self._create_muid(entry[0]) for entry in cursor]
+        return [self._muid_from_db(entry[0]) for entry in cursor]
 
     @committable
     def import_msg(self, msg, update_header=True, dup_check=True):
@@ -318,7 +318,7 @@ class MailDB(interface.MailDB):
         assert(len(results) == 1)
         entry = results[0]
 
-        db_tuid = self._create_tuid(entry[0])
+        db_tuid = self._tuid_from_db(entry[0])
         db_fingerprint = entry[4]
         msg_fingerprint = msg.binary_fingerprint()
         if db_fingerprint == msg_fingerprint:
@@ -458,8 +458,8 @@ class MailDB(interface.MailDB):
                     best_match = entry
                     break
 
-        muid = self._create_muid(best_match[0])
-        tuid = self._create_tuid(best_match[1])
+        muid = self._muid_from_db(best_match[0])
+        tuid = self._tuid_from_db(best_match[1])
         return muid, tuid
 
     def _insert_message(self, msg, muid=None, tuid=None, fingerprint=None):
@@ -482,7 +482,7 @@ class MailDB(interface.MailDB):
                 '(tuid, message_id, subject, timestamp, fingerprint) '
                 'VALUES (?, ?, ?, ?, ?)',
                 (tuid, msg_id, msg.subject, timestamp, fingerprint))
-            muid = self._create_muid(cursor.lastrowid)
+            muid = self._muid_from_db(cursor.lastrowid)
         else:
             cursor = self.db.execute(
                 'INSERT INTO messages '
@@ -545,7 +545,7 @@ class MailDB(interface.MailDB):
         cursor = self.db.execute('SELECT tuid FROM message_ids_to_thread '
                                  'WHERE message_id IN (%s)' % qmarks,
                                  tuple(msg_ids))
-        tuids = [self._create_tuid(entry[0]) for entry in cursor]
+        tuids = [self._tuid_from_db(entry[0]) for entry in cursor]
 
         if not tuids:
             return None
@@ -632,7 +632,7 @@ class MailDB(interface.MailDB):
         for match in cursor:
             tuid_value, start_time, end_time = match
             if (start_time - threshold) <= timestamp <= (end_time + threshold):
-                tuid = self._create_tuid(tuid_value)
+                tuid = self._tuid_from_db(tuid_value)
                 matching_tuids.append(tuid)
 
         if not matching_tuids:
@@ -656,7 +656,7 @@ class MailDB(interface.MailDB):
                                 '(subject, start_time, end_time) '
                                 'VALUES (?, ?, ?)',
                                 (subject_root, timestamp, timestamp))
-            tuid = self._create_tuid(c.lastrowid)
+            tuid = self._tuid_from_db(c.lastrowid)
         else:
             assert isinstance(tuid, TUID)
             self.db.execute('INSERT INTO threads '
@@ -666,7 +666,7 @@ class MailDB(interface.MailDB):
 
         return tuid
 
-    def _create_muid(self, internal_id):
+    def _muid_from_db(self, internal_id):
         '''
         Convert an internal ID used in the sqlite database to a MUID.
         '''
@@ -681,7 +681,7 @@ class MailDB(interface.MailDB):
         id_suffix = value[len(self.muid_prefix):]
         return MUID(self, int(id_suffix))
 
-    def _create_tuid(self, internal_id):
+    def _tuid_from_db(self, internal_id):
         '''
         Convert an internal ID used in the sqlite database to a TUID.
         '''
