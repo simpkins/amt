@@ -14,10 +14,12 @@ from amt.term import Terminal, Padding
 def draw(region):
     term = region.term
 
-    region.writeln(0, '{:red,underline}{pad:underline}one third{pad2}{:red}',
-                   'ABCDEF', 'Right Justified!', pad2=Padding(weight=2))
-    region.writeln(1, '{white_on_blue}This is {:underline} text', 'some test')
-    region.writeln(2, 'This is a long line: {:red}', '123456' * 200)
+    region.writeln(0, '{:red,underline}{pad:underline}one {=:blue}third'
+                   '{pad2}{:red} Text!',
+                   'ABCDEF', 'Right Justified', pad2=Padding(weight=2))
+    region.writeln(1, '{=:white,bg=blue}This is {:underline} text', 'some test')
+    region.writeln(2, 'This is a {:italic} line: {:red}',
+                   'long', '123456' * 200)
     for n in range(3, region.height - 1):
         region.writeln(n, 'Line {}', n)
     region.writeln(region.height - 1, 'Long final line: {}',

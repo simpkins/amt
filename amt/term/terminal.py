@@ -44,10 +44,15 @@ import weakref
 import sys
 from contextlib import contextmanager
 
+from .attr import *
 from .keys import TermInput
 
 
 class Terminal:
+    _ATTR_PUSH = object()
+    _ATTR_POP = object()
+    _ATTR_SET = object()
+
     def __init__(self, altscreen=False, height=0, width=0,
                  cursor=False, sigwinch=True):
         self.stream = sys.__stdout__
@@ -64,6 +69,8 @@ class Terminal:
         self._initterm()
         self._input = TermInput(sys.__stdin__.fileno())
         self._input.on_resize = self._process_resize
+
+        self.default_attr = Attributes()
 
         if sigwinch:
             self.register_sigwinch()
@@ -165,17 +172,24 @@ class Terminal:
 
     def vformat(self, fmt, args, kwargs, width=None):
         bufs = []
+        attrs = []
         pads = []
         len_left = width
 
+        attr_stack = []
+        cur_attr = self.default_attr
+
         for part in self.parse_format(fmt, args, kwargs):
-            if isinstance(part, FormattedText):
-                bufs.append(part.intro)
-                len_left = self._format_append(part.value, len_left,
-                                               bufs, pads)
-                bufs.append(part.outro)
+            if part == self._ATTR_PUSH:
+                attr_stack.append(cur_attr)
+            elif part == self._ATTR_POP:
+                assert attr_stack
+                cur_attr = attr_stack.pop()
+            elif isinstance(part, AttributeModifier):
+                cur_attr = cur_attr.modify(part)
             else:
                 len_left = self._format_append(part, len_left, bufs, pads)
+                attrs.append(cur_attr)
 
             if len_left == 0:
                 break
@@ -196,7 +210,16 @@ class Terminal:
             assert len_left == 0
             assert total_weight == 0
 
-        return ''.join(bufs)
+        outputs = []
+        cur_attr = self.default_attr
+        for idx, buf in enumerate(bufs):
+            if attrs[idx] != cur_attr:
+                outputs.append(cur_attr.change_esc(attrs[idx], self))
+                cur_attr = attrs[idx]
+            outputs.append(buf)
+        if cur_attr != self.default_attr:
+            outputs.append(cur_attr.change_esc(self.default_attr, self))
+        return ''.join(outputs)
 
     def _format_append(self, text, len_left, bufs, pads):
         if isinstance(text, Padding):
@@ -221,7 +244,10 @@ class Terminal:
     def parse_format(self, fmt, args, kwargs):
         # Supply a default set of field names that can be used in format
         # strings
-        all_kwargs = self._default_fields.copy()
+        all_kwargs = {
+            'pad': Padding(),
+            '=': self._ATTR_SET,
+        }
         all_kwargs.update(kwargs)
 
         auto_idx = 0
@@ -245,13 +271,16 @@ class Terminal:
 
             if conversion is not None:
                 value = f.convert_field(obj, conversion)
-            elif isinstance(obj, Padding):
+            elif isinstance(obj, (Padding, AttributeModifier)):
+                value = obj
+            elif self._ATTR_SET == obj:
                 value = obj
             else:
                 value = str(obj)
 
             if not format_spec:
-                yield value
+                if value != self._ATTR_SET:
+                    yield value
                 continue
 
             # Parse terminal attributes from the format_spec
@@ -262,47 +291,22 @@ class Terminal:
                 value = format(value, parts[1])
             format_spec = parts[0]
 
-            intros = []
-            outros = []
+            if value != self._ATTR_SET:
+                yield self._ATTR_PUSH
             for attr in format_spec.split(','):
                 if not attr:
                     continue
-                intro, outro = self.attribute_info(attr)
-                intros.append(intro)
-                outros.append(outro)
+                yield self.attribute_info(attr)
 
-            text = FormattedText(value, intro=''.join(intros),
-                                 outro=''.join(outros))
-            yield text
-
-        # TODO: This is only necessary when some of the internal text
-        # changed state and didn't reset it.
-        reset = FormattedText('', outro=self.get_cap('sgr0'))
-        yield reset
+            if value != self._ATTR_SET:
+                yield value
+                yield self._ATTR_POP
 
     def attribute_info(self, attr):
         try:
-            return self._attributes[attr]
+            return ATTRIBUTE_MODIFIERS[attr]
         except KeyError:
             raise Exception('unknown attribute %r' % (attr,))
-
-    def _load_attributes(self):
-        # FIXME: Make this more generic
-        self._attributes = {
-            'red': (self.get_cap('setaf', 1), self.get_cap('sgr0')),
-            'white_on_blue': (self.get_cap('setaf', 7) +
-                              self.get_cap('setab', 4),
-                              self.get_cap('sgr0')),
-            'underline': (self.get_cap('smul'), self.get_cap('rmul')),
-            'normal': (self.get_cap('sgr0'), ''),
-        }
-
-        # Supply a default set of field names for use in format strings
-        self._default_fields = {
-            'pad': Padding(),
-        }
-        for attr, (on, off) in self._attributes.items():
-            self._default_fields[attr] = on
 
     @contextmanager
     def restore_term_attrs(self):
@@ -318,7 +322,6 @@ class Terminal:
 
     def _initterm(self):
         curses.setupterm(os.environ.get('TERM', 'dumb'), self.stream.fileno())
-        self._load_attributes()
         self._orig_term_attrs = termios.tcgetattr(self.stream.fileno())
 
     def change_input_mode(self, raw, echo=False, drop_input=True, keypad=None):
@@ -478,13 +481,6 @@ class Region:
 
         self.term.move(self.x + x, self.y + y)
         self.term.write(data)
-
-
-class FormattedText:
-    def __init__(self, value, intro='', outro=''):
-        self.value = value
-        self.intro = intro
-        self.outro = outro
 
 
 class Padding:
