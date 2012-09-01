@@ -2,6 +2,7 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import copy
 
 
 class Attributes:
@@ -17,7 +18,7 @@ class Attributes:
         self.bg = bg
 
     def copy(self):
-        return Attributes(attrs=self.attrs, fg=self.fg, bg=self.bg)
+        return copy.deepcopy(self)
 
     def __eq__(self, other):
         if self.attrs != other.attrs:
@@ -33,15 +34,17 @@ class Attributes:
 
     def modify(self, modifier):
         new = self.copy()
-        new.attrs |= (modifier.attrs & modifier.attrs_mask)
-        new.attrs &= (modifier.attrs | ~modifier.attrs_mask)
+        new.modify_in_place(modifier)
+        return new
+
+    def modify_in_place(self, modifier):
+        self.attrs |= (modifier.attrs & modifier.attrs_mask)
+        self.attrs &= (modifier.attrs | ~modifier.attrs_mask)
 
         if modifier.fg_set:
-            new.fg = modifier.fg
+            self.fg = modifier.fg
         if modifier.bg_set:
-            new.bg = modifier.bg
-
-        return new
+            self.bg = modifier.bg
 
     def change_esc(self, new, term):
         '''
@@ -128,6 +131,26 @@ class AttributeModifier:
                 self.attrs_mask |= value
             else:
                 raise TypeError('invalid keyword argument %r' % (name,))
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def combine(self, modifier):
+        new = self.copy()
+        new.modify_in_place(modifier)
+        return new
+
+    def combine_in_place(self, modifier):
+        self.attrs |= (modifier.attrs & modifier.attrs_mask)
+        self.attrs &= (modifier.attrs | ~modifier.attrs_mask)
+        self.attrs_mask |= modifier.attrs_mask
+
+        if modifier.fg_set:
+            self.fg = modifier.fg
+            self.fg_set = True
+        if modifier.bg_set:
+            self.bg = modifier.bg
+            self.bg_set = True
 
 
 class Color:

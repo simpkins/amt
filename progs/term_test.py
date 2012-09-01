@@ -8,18 +8,18 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(sys.path[0]))
-from amt.term import Terminal, Padding
+from amt.term import Terminal
 
 
 def draw(region):
     term = region.term
 
-    region.writeln(0, '{:red,underline}{pad:underline}one {=:blue}third'
-                   '{pad2}{:red} Text!',
-                   'ABCDEF', 'Right Justified', pad2=Padding(weight=2))
-    region.writeln(1, '{=:white,bg=blue}This is {:underline} text', 'some test')
-    region.writeln(2, 'This is a {:italic} line: {:red}',
-                   'long', '123456' * 200)
+    region.writeln(0, '{"ABCDEF":red,underline}{=:underline}one {+:blue}third'
+                   '{=weight=2}{"Right Justified":red} Text!')
+    region.writeln(1, '{+:white,bg=blue}This is {:underline} text',
+                   'some test')
+    region.writeln(2, "This is a {'long':italic} line: {:red}",
+                   '123456' * 200)
     for n in range(3, region.height - 1):
         region.writeln(n, 'Line {}', n)
     region.writeln(region.height - 1, 'Long final line: {}',

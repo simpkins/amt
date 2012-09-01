@@ -19,12 +19,8 @@
 #   that big of a problem--it simply requires that applications know how to
 #   redraw themselves when needed.  This seems like it is necessary anyway
 #   to handle terminal resizing.
-# - Since curses knows its window buffer state and the current state of the
-#   physical screen, it can be smarter about only redrawing the areas that are
-#   actually changed, and avoid unnecessarily redrawing unchanged areas.  This
-#   doesn't seem like a huge problem these days: most people have relatively
-#   fast connections to their terminals and can live with a more characters
-#   than necessary being sent.
+# - We have to implement a bit more of our own code for knowing how to change
+#   the terminal state from one set of attributes to another.
 # - We can't use curses' input processing functionality.  This one is a bit of
 #   a hassle: we have to implement our own escape code processing.  However,
 #   python doesn't provide get_wch() yet (hopefully a usable version will be
@@ -34,10 +30,8 @@
 import curses
 import errno
 import fcntl
-import math
 import os
 import signal
-import string
 import struct
 import termios
 import weakref
@@ -46,6 +40,7 @@ from contextlib import contextmanager
 
 from .attr import *
 from .keys import TermInput
+from . import format
 
 
 class Terminal:
@@ -171,142 +166,7 @@ class Terminal:
         return self.vformat(fmt, args, kwargs)
 
     def vformat(self, fmt, args, kwargs, width=None):
-        bufs = []
-        attrs = []
-        pads = []
-        len_left = width
-
-        attr_stack = []
-        cur_attr = self.default_attr
-
-        for part in self.parse_format(fmt, args, kwargs):
-            if part == self._ATTR_PUSH:
-                attr_stack.append(cur_attr)
-            elif part == self._ATTR_POP:
-                assert attr_stack
-                cur_attr = attr_stack.pop()
-            elif isinstance(part, AttributeModifier):
-                cur_attr = cur_attr.modify(part)
-            else:
-                len_left = self._format_append(part, len_left, bufs, pads)
-                attrs.append(cur_attr)
-
-            if len_left == 0:
-                break
-
-        if pads:
-            total_weight = 0
-            for pad, buf_idx in pads:
-                total_weight += pad.weight
-
-            for pad, buf_idx in pads:
-                extra = math.ceil(pad.weight * float(len_left) / total_weight)
-                len_left -= extra
-                assert len_left >= 0
-                total_weight -= pad.weight
-                assert total_weight >= 0
-                bufs[buf_idx] = ' ' * (pad.min + extra)
-
-            assert len_left == 0
-            assert total_weight == 0
-
-        outputs = []
-        cur_attr = self.default_attr
-        for idx, buf in enumerate(bufs):
-            if attrs[idx] != cur_attr:
-                outputs.append(cur_attr.change_esc(attrs[idx], self))
-                cur_attr = attrs[idx]
-            outputs.append(buf)
-        if cur_attr != self.default_attr:
-            outputs.append(cur_attr.change_esc(self.default_attr, self))
-        return ''.join(outputs)
-
-    def _format_append(self, text, len_left, bufs, pads):
-        if isinstance(text, Padding):
-            if len_left is None:
-                bufs.append(' ' * text.default)
-                return None
-            len_left = max(0, len_left - text.min)
-            pads.append((text, len(bufs)))
-            bufs.append(None)
-            return len_left
-
-        if len_left is None:
-            bufs.append(text)
-            return None
-        elif len(text) > len_left:
-            bufs.append(text[:len_left])
-            return 0
-        else:
-            bufs.append(text)
-            return len_left - len(text)
-
-    def parse_format(self, fmt, args, kwargs):
-        # Supply a default set of field names that can be used in format
-        # strings
-        all_kwargs = {
-            'pad': Padding(),
-            '=': self._ATTR_SET,
-        }
-        all_kwargs.update(kwargs)
-
-        auto_idx = 0
-        f = string.Formatter()
-        for literal, field_name, format_spec, conversion in f.parse(fmt):
-            if literal:
-                yield literal
-            if field_name is None:
-                continue
-
-            if field_name is '':
-                if auto_idx is None:
-                    raise Exception('cannot switch between manual field '
-                                    'specification and auto-indexing')
-                obj = f.get_value(auto_idx, args, all_kwargs)
-                auto_idx += 1
-            else:
-                obj, used_key = f.get_field(field_name, args, all_kwargs)
-                if isinstance(used_key, int):
-                    auto_idx = None
-
-            if conversion is not None:
-                value = f.convert_field(obj, conversion)
-            elif isinstance(obj, (Padding, AttributeModifier)):
-                value = obj
-            elif self._ATTR_SET == obj:
-                value = obj
-            else:
-                value = str(obj)
-
-            if not format_spec:
-                if value != self._ATTR_SET:
-                    yield value
-                continue
-
-            # Parse terminal attributes from the format_spec
-            # Allow normal string format specifier after a second ':'
-            # e.g., {0:red:>30}
-            parts = format_spec.split(':', 1)
-            if len(parts) > 1:
-                value = format(value, parts[1])
-            format_spec = parts[0]
-
-            if value != self._ATTR_SET:
-                yield self._ATTR_PUSH
-            for attr in format_spec.split(','):
-                if not attr:
-                    continue
-                yield self.attribute_info(attr)
-
-            if value != self._ATTR_SET:
-                yield value
-                yield self._ATTR_POP
-
-    def attribute_info(self, attr):
-        try:
-            return ATTRIBUTE_MODIFIERS[attr]
-        except KeyError:
-            raise Exception('unknown attribute %r' % (attr,))
+        return format.vformat(self, fmt, args, kwargs, width=width)
 
     @contextmanager
     def restore_term_attrs(self):
@@ -481,10 +341,3 @@ class Region:
 
         self.term.move(self.x + x, self.y + y)
         self.term.write(data)
-
-
-class Padding:
-    def __init__(self, min=1, default=2, weight=1):
-        self.min = min
-        self.default = default
-        self.weight = weight
