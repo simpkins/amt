@@ -56,7 +56,7 @@ class Terminal:
 
         self.use_env_size = True
         self.on_resize = None
-        self._regions = {}
+        self._regions = RegionContainer()
         self.root = None
 
         self._keypad_on = False
@@ -93,16 +93,13 @@ class Terminal:
 
     def recompute_size(self):
         self._width, self._height = self._get_dimensions()
+        self._regions.recompute_sizes()
 
-        regions = list(self._regions.values())
-        for ref in regions:
-            region = ref()
-            if region is None:
-                continue
-            region.recompute_size()
-
+        # Call the on_resize() callback after our size and all of the
+        # regions sizes have been updated.
         if self.on_resize:
             self.on_resize()
+        self._regions.invoke_on_resize()
 
     def _get_dimensions(self):
         if self.use_env_size:
@@ -122,19 +119,12 @@ class Terminal:
 
     def write(self, text, *args, **kwargs):
         if args or kwargs:
-            text = self.vformat(text, args, kwargs)
+            text = format.format(text, *args, **kwargs)
 
         self.stream.write(text)
 
     def region(self, x, y, width=0, height=0):
-        def _region_destroyed(ref):
-            del self._regions[ref_id]
-
-        region = Region(self, x, y, width, height)
-        ref = weakref.ref(region, _region_destroyed)
-        ref_id = id(ref)
-        self._regions[ref_id] = ref
-        return region
+        return self._regions.new_region(self, self, x, y, width, height)
 
     @property
     def height(self):
@@ -163,10 +153,11 @@ class Terminal:
         self.write(self.get_cap(cap, *args))
 
     def format(self, fmt, *args, **kwargs):
-        return self.vformat(fmt, args, kwargs)
+        return format.format(fmt, *args, **kwargs)
 
-    def vformat(self, fmt, args, kwargs, width=None):
-        return format.vformat(self, fmt, args, kwargs, width=width)
+    def vformat(self, fmt, args, kwargs, width=None, hfill=None):
+        return format.vformat(self, fmt, args, kwargs,
+                              width=width, hfill=hfill)
 
     @contextmanager
     def restore_term_attrs(self):
@@ -286,25 +277,61 @@ class Terminal:
             self.flush()
 
 
+class RegionContainer:
+    def __init__(self):
+        self._regions = {}
+
+    def new_region(self, term, parent, x, y, width, height):
+        def _region_destroyed(ref):
+            del self._regions[ref_id]
+
+        region = Region(term, parent, x, y, width, height)
+        ref = weakref.ref(region, _region_destroyed)
+        ref_id = id(ref)
+        self._regions[ref_id] = ref
+        return region
+
+    def all_regions(self):
+        for ref in self._regions.values():
+            region = ref()
+            if region is not None:
+                yield region
+
+    def recompute_sizes(self):
+        for region in self.all_regions():
+            region.recompute_size()
+
+    def invoke_on_resize(self):
+        for region in self.all_regions():
+            region.invoke_on_resize()
+
+
 class Region:
-    def __init__(self, term, x, y, width, height):
+    def __init__(self, term, parent, x, y, width, height):
         self.term = term
+        self.parent = parent
         self.desired_x = x
         self.desired_y = y
         self.desired_width = width
         self.desired_height = height
 
+        self._regions = RegionContainer()
+        self.on_resize = None
+
         self.recompute_size()
+
+    def region(self, x, y, width=0, height=0):
+        return self._regions.new_region(self.term, self, x, y, width, height)
 
     def recompute_size(self):
         if self.desired_x >= 0:
             self.x = self.desired_x
         else:
-            self.x = max(self.term.width -1 + self.desired_x, 0)
+            self.x = max(self.term.width + self.desired_x, 0)
         if self.desired_y >= 0:
             self.y = self.desired_y
         else:
-            self.y = max(self.term.height -1 + self.desired_y, 0)
+            self.y = max(self.term.height + self.desired_y, 0)
 
         max_width = self.term.width - self.x
         if self.desired_width <= 0:
@@ -318,10 +345,26 @@ class Region:
         else:
             self.height = min(self.desired_height, max_height)
 
+        self._regions.recompute_sizes()
+
+    def invoke_on_resize(self):
+        if self.on_resize:
+            self.on_resize()
+
+        self._regions.invoke_on_resize()
+
     def writeln(self, y, text, *args, **kwargs):
-        self.write_xy(0, y, text, *args, **kwargs)
+        self.vwriteln(y, text, args, kwargs,
+                      hfill=kwargs.get('hfill', True))
+
+    def vwriteln(self, y, text, args, kwargs, hfill=True):
+        self.vwrite_xy(0, y, text, args, kwargs, hfill=hfill)
 
     def write_xy(self, x, y, text, *args, **kwargs):
+        self.vwrite_xy(x, y, text, args, kwargs,
+                       hfill=kwargs.get('hfill', True))
+
+    def vwrite_xy(self, x, y, text, args, kwargs, hfill=True):
         if y >= self.height:
             return
         elif y < 0:
@@ -337,7 +380,8 @@ class Region:
             if x < 0:
                 return
 
-        data = self.term.vformat(text, args, kwargs, width=self.width - x)
+        width = self.width - x
+        data = self.term.vformat(text, args, kwargs, width=width, hfill=hfill)
 
         self.term.move(self.x + x, self.y + y)
         self.term.write(data)

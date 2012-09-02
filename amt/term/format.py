@@ -134,10 +134,11 @@ _ACTION_POP_ATTR = object()
 
 
 def format(term, fmt, *args, **kwargs):
-    return vformat(term, fmt, args, kwargs)
+    return vformat(term, fmt, args, kwargs,
+                   width=kwargs.get('width'), hfill=kwargs.get('hfill'))
 
 
-def vformat(term, fmt, args, kwargs, width=None):
+def vformat(term, fmt, args, kwargs, width=None, hfill=False):
     bufs = []
     attrs = []
     pads = []
@@ -193,6 +194,13 @@ def vformat(term, fmt, args, kwargs, width=None):
 
         assert len_left == 0
         assert total_weight == 0
+    elif hfill is not None and len_left is not None:
+        attrs.append(cur_attr)
+        if not isinstance(hfill, str):
+            hfill = ' '
+        pad = hfill * len_left
+        pad = pad[:len_left]  # in case hfill is more than 1 character
+        bufs.append(pad)
 
     outputs = []
     cur_attr = term.default_attr
@@ -310,7 +318,8 @@ class _FormatParser:
             self.append_with_attrs(_ACTION_PADDING, padding, term_attrs)
             return
 
-        obj, used_key = f.get_field(field_name, args, kwargs)
+        obj, used_key = self.formatter.get_field(field_name,
+                                                 self.args, self.kwargs)
         if isinstance(used_key, int):
             self.auto_idx = None
         self.append_literal(obj, term_attrs, format_spec, conversion)
@@ -340,7 +349,7 @@ class _FormatParser:
             value = str(value)
 
         if format_spec:
-            value = format(value, format_spec)
+            value = value.__format__(format_spec)
 
         self.append_with_attrs(_ACTION_LITERAL, value, term_attrs)
 
