@@ -5,6 +5,5 @@
 from . import keys
 from . import widgets
 from .terminal import Terminal, Region
-from .keys import Key
 
 keys.define_key_constants(globals())
