@@ -39,7 +39,7 @@ import sys
 from contextlib import contextmanager
 
 from .attr import *
-from .keys import TermInput
+from . import keys
 from . import format
 
 
@@ -60,9 +60,10 @@ class Terminal:
         self.root = None
 
         self._keypad_on = False
+        self._term_modes = []
 
         self._initterm()
-        self._input = TermInput(sys.__stdin__.fileno())
+        self._input = keys.TermInput(sys.__stdin__.fileno())
         self._input.on_resize = self._process_resize
 
         self.default_attr = Attributes()
@@ -88,8 +89,24 @@ class Terminal:
     def set_escape_time(self, seconds):
         self._input.escape_time = seconds
 
-    def getch(self, escape_time=None):
-        return self._input.getch(escape_time)
+    def getch(self, escape_time=None, handle_sig_keys=True):
+        while True:
+            key = self._input.getch(escape_time)
+            if handle_sig_keys:
+                if key == keys.KEY_CTRL_Z:
+                    self._restore_terminal()
+                    os.kill(0, signal.SIGSTOP)
+                    self._reenter_term_mode()
+                    self.recompute_size()
+                    continue
+                elif key == keys.KEY_CTRL_C:
+                    os.kill(0, signal.SIGINT)
+                    continue
+                elif key == keys.KEY_CTRL_BACKSLASH:
+                    self._restore_terminal()
+                    os.kill(0, signal.SIGQUIT)
+                    continue
+            return key
 
     def recompute_size(self):
         self._width, self._height = self._get_dimensions()
@@ -160,28 +177,18 @@ class Terminal:
         return format.vformat(self, fmt, args, kwargs,
                               width=width, hfill=hfill)
 
-    @contextmanager
-    def restore_term_attrs(self):
-        current_attrs = termios.tcgetattr(self.stream.fileno())
-        termios.tcsetattr(self.stream.fileno(), termios.TCSAFLUSH,
-                          self._orig_term_attrs)
-
-        try:
-            yield
-        finally:
-            termios.tcsetattr(self.stream.fileno(), termios.TCSAFLUSH,
-                              current_attrs)
-
     def _initterm(self):
         curses.setupterm(os.environ.get('TERM', 'dumb'), self.stream.fileno())
-        self._orig_term_attrs = termios.tcgetattr(self.stream.fileno())
 
-    def change_input_mode(self, raw, echo=False, drop_input=True, keypad=None):
+    def change_input_mode(self, raw, echo=False, drop_input=True,
+                          signal_keys=None, keypad=None):
         orig_attrs = termios.tcgetattr(self.stream.fileno())
         orig_keypad = self._keypad_on
 
         if keypad is None:
             keypad = raw
+        if signal_keys is None:
+            signal_keys = not raw
 
         attrs = orig_attrs[:]
         attrs[3] |= termios.ISIG
@@ -190,6 +197,11 @@ class Terminal:
             attrs[3] |= termios.ECHO
         else:
             attrs[3] &= ~termios.ECHO
+
+        if signal_keys:
+            attrs[3] |= termios.ISIG
+        else:
+            attrs[3] &= ~termios.ISIG
 
         if raw:
             attrs[0] &= ~termios.ICRNL
@@ -209,10 +221,7 @@ class Terminal:
         termios.tcsetattr(self.stream.fileno(), how, attrs)
         return orig_attrs, orig_keypad
 
-    def restore_input_mode(self, state=None, drop_input=True):
-        if state is None:
-            state = (self._orig_term_attrs, False)
-
+    def restore_input_mode(self, state, drop_input=True):
         attrs = state[0]
         keypad = state[1]
 
@@ -239,36 +248,48 @@ class Terminal:
 
     @contextmanager
     def raw_input(self, echo=False, drop_input=True):
-        orig_attrs = self.change_input_mode(raw=True, echo=echo,
-                                            drop_input=drop_input)
-        try:
-            yield
-        finally:
+        orig_attrs = None
+
+        def enter_raw_mode():
+            nonlocal orig_attrs
+            orig_attrs = self.change_input_mode(raw=True, echo=echo,
+                                                drop_input=drop_input)
+
+        def restore_term():
+            nonlocal orig_attrs
             self.restore_input_mode(orig_attrs, drop_input=drop_input)
+
+        with self._term_mode(enter_raw_mode, restore_term):
+            yield
 
     @contextmanager
     def program_mode(self, height=0, width=0,
                      altscreen=False, cursor=False, echo=False, raw=True):
-        orig_attrs = self.change_input_mode(raw=raw, echo=echo)
-        if altscreen:
-            self.write_cap('smcup')
-        if not cursor:
-            self.write_cap('civis')
+        orig_attrs = None
 
-        self.recompute_size()
+        def enter_program_mode():
+            nonlocal orig_attrs
+            orig_attrs = self.change_input_mode(raw=raw, echo=echo)
+            if altscreen:
+                self.write_cap('smcup')
+            if not cursor:
+                self.write_cap('civis')
 
-        root = self.region(0, -height, -width, 0)
-        if root.height == self.height:
-            self.clear()
-        else:
-            self.write(self.get_cap('ind') * root.height)
+            self.recompute_size()
 
-        self.move(0, self.height - 1)
-        self.flush()
+            root = self.region(0, -height, -width, 0)
+            if root.height == self.height:
+                self.clear()
+            else:
+                self.write(self.get_cap('ind') * root.height)
 
-        try:
-            yield root
-        finally:
+            self.move(0, self.height - 1)
+            self.flush()
+
+            return root
+
+        def restore_term_mode():
+            nonlocal orig_attrs
             self.move(0, self.height - 1)
             self.write_cap('el')
             self.write_cap('cnorm')
@@ -276,6 +297,43 @@ class Terminal:
                 self.write_cap('rmcup')
             self.restore_input_mode(orig_attrs)
             self.flush()
+
+        with self._term_mode(enter_program_mode, restore_term_mode) as root:
+            yield root
+
+    @contextmanager
+    def shell_mode(self):
+        '''
+        A contextmanager that restores the terminal to its normal settings,
+        then returns back to the current mode when exiting the context.
+        '''
+        self._restore_terminal()
+        term_modes = self._term_modes
+        self._term_modes = []
+        try:
+            yield
+        finally:
+            self._term_modes = term_modes
+            self._reenter_term_mode()
+            self.recompute_size()
+
+    @contextmanager
+    def _term_mode(self, enter_fn, restore_fn):
+        self._term_modes.append((enter_fn, restore_fn))
+        result = enter_fn()
+        try:
+            yield result
+        finally:
+            restore_fn()
+            self._term_modes.pop()
+
+    def _restore_terminal(self):
+        for enter_fn, restore_fn in reversed(self._term_modes):
+            restore_fn()
+
+    def _reenter_term_mode(self):
+        for enter_fn, restore_fn in self._term_modes:
+            enter_fn()
 
 
 class RegionContainer:
