@@ -16,6 +16,7 @@ class ListSelection:
         self.region.on_resize = self._on_resize
         self.page_start = 0
         self.cur_idx = 0
+        self.visible = True
 
     def get_num_items(self):
         '''
@@ -80,6 +81,10 @@ class ListSelection:
         old_idx = self.cur_idx
         self.cur_idx = idx
         page_changed = self._adjust_page()
+
+        if not self.visible:
+            return
+
         if page_changed:
             # redraw the entire region
             self.redraw(flush=False)
@@ -118,12 +123,15 @@ class ListSelection:
     def _on_resize(self):
         # Recompute self.page_start so that self.cur_idx is still visible
         self._adjust_page()
-        self.redraw(flush=False)
+        if self.visible:
+            self.redraw(flush=False)
 
     def redraw(self, flush=True):
         '''
         Redraw the entire region.
         '''
+        assert self.visible
+
         line_idx = 0
         item_idx = self.page_start
         num_items = self.get_num_items()
@@ -149,6 +157,8 @@ class ListSelection:
         Subclasses should normally override get_item_format(), and generally
         should not need to change render_item().
         '''
+        assert self.visible
+
         selected = (item_idx == self.cur_idx)
         result = self.get_item_format(item_idx, selected)
 

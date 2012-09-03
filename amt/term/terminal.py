@@ -444,3 +444,13 @@ class Region:
 
         self.term.move(self.x + x, self.y + y)
         self.term.write(data)
+
+    def clear(self):
+        if (self.x == 0 and self.y == 0 and
+            self.width == self.term.width and self.height == self.term.height):
+            self.term.clear()
+            return
+
+        for y in range(self.height):
+            self.term.move(self.x, self.y + y)
+            self.term.write(' ' * self.width)
