@@ -3,6 +3,7 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 from . import keys
+from . import widgets
 from .terminal import Terminal, Region
 from .keys import Key
 

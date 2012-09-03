@@ -100,6 +100,7 @@ class Terminal:
         if self.on_resize:
             self.on_resize()
         self._regions.invoke_on_resize()
+        self.flush()
 
     def _get_dimensions(self):
         if self.use_env_size:
