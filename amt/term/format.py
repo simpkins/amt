@@ -126,11 +126,230 @@ import string
 
 from .attr import *
 
-_ACTION_LITERAL = object()
-_ACTION_PADDING = object()
-_ACTION_SET_ATTR = object()
-_ACTION_PUSH_ATTR = object()
-_ACTION_POP_ATTR = object()
+
+class TextSegment:
+    def __init__(self):
+        # Required attributes of all TextSegment objects
+        self.attr_modifier = None
+        self.permanent_attr = False
+
+        self.min_width = 0
+        self.max_width = 0
+        self.pad_precedence = 0
+        self.pad_weight = 0
+
+    def get_value_default_width(self):
+        pass
+
+    def get_value_min_width(self, width):
+        pass
+
+    def get_value_pad_width(self, width):
+        pass
+
+
+class FixedTextSegment(TextSegment):
+    def __init__(self, value):
+        super(FixedTextSegment, self).__init__()
+
+        self.value = value
+        self.min_width = len(self.value)
+        self.max_width = len(self.value)
+
+        self.pad_precedence = 0
+        self.pad_weight = 0
+
+    def get_value_default_width(self):
+        return self.value
+
+    def get_value_min_width(self, width):
+        assert width <= len(self.value)
+        if width < len(self.value):
+            return self.value[:width]
+        return self.value
+
+    def get_value_pad_width(self, width):
+        assert width == len(self.value)
+        return self.value
+
+
+class VariableTextSegment(TextSegment):
+    def __init__(self, value, attr, min_width=None, pad_weight=1):
+        super(VariableTextSegment, self).__init__(attr)
+
+        self.value = value
+        if min_width is None:
+            min_width = len(self.value)
+        self.min_width = min(min_width, len(self.value))
+        self.max_width = len(self.value)
+
+        self.pad_precedence = 0
+        self.pad_weight = pad_weight
+
+    def get_value_default_width(self):
+        return self.value
+
+    def get_value_min_width(self, width):
+        assert width <= self.min_width
+        return self.get_value(width)
+
+    def get_value_pad_width(self, width):
+        assert width >= self.min_width
+        return self.get_value(width)
+
+    def get_value(self, width):
+        assert width <= len(self.value)
+        if width >= len(self.value):
+            return self.value
+        return self.value[:width]
+
+
+class PaddingSegment(TextSegment):
+    def __init__(self, value=' ', min_width=1, default_width=4,
+                 max_width=None, pad_weight=1, precedence=1):
+        super(PaddingSegment, self).__init__()
+
+        self.value = value
+        self.min_width = min_width
+        self.max_width = max_width
+        self.default_width = default_width
+
+        self.pad_precedence = precedence
+        self.pad_weight = pad_weight
+
+    def get_value_default_width(self):
+        return self.get_value(self.default_width)
+
+    def get_value_min_width(self, width):
+        return self.get_value(self.min_width)
+
+    def get_value_pad_width(self, width):
+        return self.get_value(width)
+
+    def get_value(self, width):
+        if len(self.value) == 1:
+            return self.value * width
+        else:
+            repititions = 1 + (width / len(self.value))
+            return (self.value * repititions)[:width]
+
+        assert width <= len(self.value)
+        if width < self.value:
+            return self.value[:width]
+        return self.value
+
+
+class TextLine:
+    def __init__(self):
+        self.segments = []
+
+    def render(self, term, width):
+        # If we don't have a line width, use the default widths
+        if width is None:
+            return self._render(term, self.get_default_widths())
+
+        # Compute the length if we just used the minimum widths
+        min_width = 0
+        pad_weights = {}
+        widths = [0] * len(self.segments)
+        for idx, segment in enumerate(self.segments):
+            widths[idx] = segment.min_width
+            min_width += segment.min_width
+            if min_width >= width:
+                # The line doesn't fit.  Render as much as we can
+                # using the minimum widths.
+                return self._render(term, self.get_min_widths(width))
+
+            pad_weights.setdefault(segment.pad_precedence, 0)
+            pad_weights[segment.pad_precedence] += segment.pad_weight
+
+        # We have room left over after the minimum widths.
+        # Compute how much extra space should be allocated to each segment,
+        # based on their weights.
+        len_left = width - min_width
+        # Different segments may have different padding precedences.
+        # This allows text segments to fully expand before we start inserting
+        # more whitespace padding.
+        #
+        # Iterate through each precedence level, and allocate as much padding
+        # as possible to each level before preceding to the next level.
+        sorted_weights = sorted(pad_weights.items(), key=lambda x: x[0])
+        for precedence, total_weight in sorted_weights:
+            while len_left > 0:
+                padding_allocated = 0
+                weight_left = total_weight
+                for idx, segment in enumerate(self.segments):
+                    if weight_left <= 0:
+                        break
+                    extra = math.ceil(segment.pad_weight *
+                                      float(len_left) / weight_left)
+                    cur_width = widths[idx]
+                    new_width = cur_width + extra
+                    if segment.max_width is not None:
+                        new_width = min(segment.max_width, new_width)
+                        extra = new_width - cur_width
+                    widths[idx] = new_width
+
+                    weight_left -= segment.pad_weight
+                    assert weight_left >= 0
+                    len_left -= extra
+                    assert len_left >= 0
+                    padding_allocated += extra
+
+                if padding_allocated == 0:
+                    break
+            if len_left == 0:
+                break
+
+        pieces = self.get_pad_widths(widths)
+        return self._render(term, pieces)
+
+    def _render(self, term, pieces):
+        outputs = []
+        cur_attr = term.default_attr
+        last_attr = term.default_attr
+        attr_stack = []
+
+        for segment, value in pieces:
+            if segment.attr_modifier is None:
+                new_attr = cur_attr
+            else:
+                new_attr = cur_attr.modify(segment.attr_modifier)
+
+            if new_attr != last_attr:
+                outputs.append(last_attr.change_esc(new_attr, term))
+                last_attr = new_attr
+            if segment.permanent_attr:
+                cur_attr = new_attr
+
+            outputs.append(value)
+
+        if last_attr != term.default_attr:
+            outputs.append(last_attr.change_esc(term.default_attr, term))
+
+        return ''.join(outputs)
+
+    def get_default_widths(self):
+        for segment in self.segments:
+            yield segment, segment.get_value_default_width()
+
+    def get_min_widths(self, width):
+        len_left = width
+        for segment in self.segments:
+            segment_width = min(segment.min_width, len_left)
+            value = segment.get_value_min_width(segment_width)
+            len_left -= len(value)
+            assert len_left >= 0
+
+            yield segment, value
+            if len_left <= 0:
+                return
+
+    def get_pad_widths(self, widths):
+        for segment, width in zip(self.segments, widths):
+            value = segment.get_value_pad_width(width)
+            assert len(value) == width
+            yield segment, value
 
 
 def format(term, fmt, *args, **kwargs):
@@ -139,84 +358,26 @@ def format(term, fmt, *args, **kwargs):
 
 
 def vformat(term, fmt, args, kwargs, width=None, hfill=False):
-    bufs = []
-    attrs = []
-    pads = []
-    len_left = width
+    line = vformat_line(term, fmt, args, kwargs, width=width, hfill=hfill)
+    return line.render(term, width)
 
-    attr_stack = []
-    cur_attr = term.default_attr
 
-    for action, value in _FormatParser(fmt, args, kwargs):
-        if action == _ACTION_LITERAL:
-            attrs.append(cur_attr)
-            if len_left is None:
-                bufs.append(value)
-            elif len(value) > len_left:
-                bufs.append(value[:len_left])
-                len_left = 0
-                break
-            else:
-                bufs.append(value)
-                len_left -= len(value)
-        elif action == _ACTION_PADDING:
-            attrs.append(cur_attr)
-            if len_left is None:
-                bufs.append(' ' * value.default)
-            else:
-                len_left = max(0, len_left - value.min)
-                pads.append((value, len(bufs)))
-                bufs.append(None)
-                if len_left == 0:
-                    break
-        elif action == _ACTION_PUSH_ATTR:
-            attr_stack.append(cur_attr)
-        elif action == _ACTION_POP_ATTR:
-            assert attr_stack
-            cur_attr = attr_stack.pop()
-        elif action == _ACTION_SET_ATTR:
-            cur_attr = cur_attr.modify(value)
-        else:
-            raise Exception('unknown action: %r, %r' % (action, value))
+def vformat_line(term, fmt, args, kwargs, width=None, hfill=False):
+    line = TextLine()
+    for segment in _FormatParser(fmt, args, kwargs):
+        line.segments.append(segment)
 
-    if pads:
-        total_weight = 0
-        for pad, buf_idx in pads:
-            total_weight += pad.weight
-
-        for pad, buf_idx in pads:
-            extra = math.ceil(pad.weight * float(len_left) / total_weight)
-            len_left -= extra
-            assert len_left >= 0
-            total_weight -= pad.weight
-            assert total_weight >= 0
-            bufs[buf_idx] = ' ' * (pad.min + extra)
-
-        assert len_left == 0
-        assert total_weight == 0
-    elif hfill is not None and len_left is not None:
-        attrs.append(cur_attr)
+    if hfill:
         if not isinstance(hfill, str):
             hfill = ' '
-        pad = hfill * len_left
-        pad = pad[:len_left]  # in case hfill is more than 1 character
-        bufs.append(pad)
-
-    outputs = []
-    cur_attr = term.default_attr
-    for idx, buf in enumerate(bufs):
-        if attrs[idx] != cur_attr:
-            outputs.append(cur_attr.change_esc(attrs[idx], term))
-            cur_attr = attrs[idx]
-        outputs.append(buf)
-    if cur_attr != term.default_attr:
-        outputs.append(cur_attr.change_esc(term.default_attr, term))
-    return ''.join(outputs)
+        pad = PaddingSegment(hfill, min_width=0, default_width=0, precedence=2)
+        line.segments.append(pad)
+    return line
 
 
 class _FormatParser:
     def __init__(self, fmt, args, kwargs):
-        self.results = []
+        self.segments = []
         self.auto_idx = 0
 
         self.args = args
@@ -229,20 +390,19 @@ class _FormatParser:
         return self
 
     def __next__(self):
-        if not self.results:
+        if not self.segments:
             self.parse_more()
 
-        action, value = self.results.pop(0)
-        return action, value
+        return self.segments.pop(0)
 
-    def add_result(self, action, value):
-        self.results.append((action, value))
+    def add_segment(self, segment):
+        self.segments.append(segment)
 
     def parse_more(self):
         literal, field_name, format_spec, conversion = next(self.fmt_iter)
 
         if literal:
-            self.add_result(_ACTION_LITERAL, literal)
+            self.add_segment(FixedTextSegment(literal))
         if field_name is None:
             return
 
@@ -308,14 +468,17 @@ class _FormatParser:
             return
 
         if field_name == '+':
-            self.add_result(_ACTION_SET_ATTR, term_attrs)
+            segment = FixedTextSegment('')
+            segment.attr_modifier = term_attrs
+            segment.permanent_attr = True
+            self.add_segment(segment)
             return
 
         if field_name.startswith('='):
             # Padding
-            pad_kwargs = self.parse_padding_kwargs(field_name[1:])
-            padding = Padding(**pad_kwargs)
-            self.append_with_attrs(_ACTION_PADDING, padding, term_attrs)
+            segment = self.parse_padding(field_name[1:])
+            segment.attr_modifier = term_attrs
+            self.add_segment(segment)
             return
 
         obj, used_key = self.formatter.get_field(field_name,
@@ -324,11 +487,11 @@ class _FormatParser:
             self.auto_idx = None
         self.append_literal(obj, term_attrs, format_spec, conversion)
 
-    def parse_padding_kwargs(self, value):
+    def parse_padding(self, value):
+        segment = PaddingSegment()
         if not value:
-            return {}
+            return segment
 
-        pad_kwargs = {}
         params = value.split(',')
         for p in params:
             parts = p.split('=', 1)
@@ -336,11 +499,15 @@ class _FormatParser:
                 raise Exception('padding properties must be of the form '
                                 'name=value: %r' % p)
             name, value = parts
-            if name in ('min', 'default', 'weight'):
-                pad_kwargs[name] = int(value)
+            if name == 'min':
+                segment.min_width = int(value)
+            elif name == 'default':
+                segment.default_width = int(value)
+            elif name == 'weight':
+                segment.pad_weight = int(value)
             else:
                 raise Exception('unknown padding property %r' % (name,))
-        return pad_kwargs
+        return segment
 
     def append_literal(self, value, term_attrs, format_spec, conversion):
         if conversion is not None:
@@ -351,20 +518,6 @@ class _FormatParser:
         if format_spec:
             value = value.__format__(format_spec)
 
-        self.append_with_attrs(_ACTION_LITERAL, value, term_attrs)
-
-    def append_with_attrs(self, action, value, term_attrs):
-        if term_attrs:
-            self.add_result(_ACTION_PUSH_ATTR, None)
-            self.add_result(_ACTION_SET_ATTR, term_attrs)
-            self.add_result(action, value)
-            self.add_result(_ACTION_POP_ATTR, None)
-        else:
-            self.add_result(action, value)
-
-
-class Padding:
-    def __init__(self, min=1, default=4, weight=1):
-        self.min = min
-        self.default = default
-        self.weight = weight
+        segment = FixedTextSegment(value)
+        segment.attr_modifier = term_attrs
+        self.add_segment(segment)
