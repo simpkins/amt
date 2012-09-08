@@ -34,11 +34,11 @@ import os
 import signal
 import struct
 import termios
-import weakref
 import sys
 from contextlib import contextmanager
 
 from .attr import *
+from .util import WeakrefContainer
 from . import keys
 from . import format
 
@@ -338,30 +338,19 @@ class Terminal:
 
 class RegionContainer:
     def __init__(self):
-        self._regions = {}
+        self._regions = WeakrefContainer()
 
     def new_region(self, term, parent, x, y, width, height):
-        def _region_destroyed(ref):
-            del self._regions[ref_id]
-
         region = Region(term, parent, x, y, width, height)
-        ref = weakref.ref(region, _region_destroyed)
-        ref_id = id(ref)
-        self._regions[ref_id] = ref
+        self._regions.add(region)
         return region
 
-    def all_regions(self):
-        for ref in self._regions.values():
-            region = ref()
-            if region is not None:
-                yield region
-
     def recompute_sizes(self):
-        for region in self.all_regions():
+        for region in self._regions:
             region.recompute_size()
 
     def invoke_on_resize(self):
-        for region in self.all_regions():
+        for region in self._regions:
             region.invoke_on_resize()
 
 
@@ -386,19 +375,19 @@ class Region:
         if self.desired_x >= 0:
             self.x = self.desired_x
         else:
-            self.x = max(self.term.width + self.desired_x, 0)
+            self.x = max(self.parent.width + self.desired_x, 0)
         if self.desired_y >= 0:
             self.y = self.desired_y
         else:
-            self.y = max(self.term.height + self.desired_y, 0)
+            self.y = max(self.parent.height + self.desired_y, 0)
 
-        max_width = self.term.width - self.x
+        max_width = self.parent.width - self.x
         if self.desired_width <= 0:
             self.width = max(max_width + self.desired_width, 0)
         else:
             self.width = min(self.desired_width, max_width)
 
-        max_height = self.term.height - self.y
+        max_height = self.parent.height - self.y
         if self.desired_height <= 0:
             self.height = max(max_height + self.desired_height, 0)
         else:

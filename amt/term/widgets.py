@@ -2,9 +2,96 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+from .terminal import Region
+from .util import WeakrefContainer
 
 
-class ListSelection:
+class Drawable:
+    def __init__(self, param):
+        if isinstance(param, tuple):
+            # A value returned by Drawable.subdrawable()
+            self.__parent = param[0]
+            self.__region = param[1]
+        elif isinstance(param, Region):
+            self.__parent = None
+            self.__region = param
+        elif isinstance(param, Drawable):
+            self.__parent = param
+            self.__region = param.region
+
+        self.__visible = True
+        self.__children = WeakrefContainer()
+        self.__region.on_resize = self._on_resize
+
+        if self.__parent:
+            # If we have a parent, add ourself to its children.
+            # It's redarw mechanism should handle redrawing us too.
+            self.__parent.__children.add(self)
+
+    def _redraw(self):
+        raise NotImplementedError('_redraw() must be implemented '
+                                  'by subclasses')
+
+    def on_resize(self):
+        # subclasses may implement on_resize() if they need to adjust
+        # any state on a resize event.
+        # on_resize() will be called before the drawable is redrawn.
+        pass
+
+    @property
+    def parent(self):
+        return self.__parent
+
+    @property
+    def region(self):
+        return self.__region
+
+    @property
+    def term(self):
+        return self.__region.term
+
+    def redraw(self, flush=True):
+        assert self.visible
+        self._redraw()
+        if flush:
+            self.term.flush()
+
+    def subregion(self, x, y, width=0, height=0):
+        return self.region.region(x=x, y=y, width=width, height=height)
+
+    def subdrawable(self, x, y, width=0, height=0):
+        region = self.region.region(x=x, y=y, width=width, height=height)
+        return (self, region)
+
+    def get_visible(self):
+        return self.__visible
+
+    def set_visible(self, visible):
+        if visible == self.__visible:
+            return
+
+        self._update_visibility(visible)
+        if visible:
+            self.redraw()
+
+    visible = property(get_visible, set_visible)
+
+    def _update_visibility(self, value):
+        self.__visible = value
+        for child in self.__children:
+            child._update_visibility(value)
+
+    def _on_resize(self):
+        # Call self.on_resize() to let subclasses update state if necessary
+        self.on_resize()
+
+        # If we have a parent, it will handle redrawing us.
+        # Otherwise we need to call redraw() ourselves.
+        if self.visible:
+            self.redraw(flush=False)
+
+
+class ListSelection(Drawable):
     '''
     A ListSelection displays a list of items, with one item selected.
 
@@ -12,11 +99,9 @@ class ListSelection:
     is too long to fit in the region.
     '''
     def __init__(self, region):
-        self.region = region
-        self.region.on_resize = self._on_resize
+        super(ListSelection, self).__init__(region)
         self.page_start = 0
         self.cur_idx = 0
-        self.visible = True
 
     def get_num_items(self):
         '''
@@ -120,18 +205,10 @@ class ListSelection:
         else:
             return False
 
-    def _on_resize(self):
-        # Recompute self.page_start so that self.cur_idx is still visible
+    def on_resize(self):
         self._adjust_page()
-        if self.visible:
-            self.redraw(flush=False)
 
-    def redraw(self, flush=True):
-        '''
-        Redraw the entire region.
-        '''
-        assert self.visible
-
+    def _redraw(self):
         line_idx = 0
         item_idx = self.page_start
         num_items = self.get_num_items()
@@ -143,9 +220,6 @@ class ListSelection:
         while line_idx < self.region.height:
             self.region.writeln(line_idx, '{=}')
             line_idx += 1
-
-        if flush:
-            self.region.term.flush()
 
     def render_item(self, line_idx, item_idx):
         '''
