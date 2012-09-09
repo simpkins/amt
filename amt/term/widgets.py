@@ -4,6 +4,7 @@
 #
 from .terminal import Region
 from .util import WeakrefContainer
+from .format import vformat_line
 
 
 class Drawable:
@@ -291,3 +292,27 @@ class FixedListSelection(ListSelection):
         if selected:
             fmt = '{+:reverse}' + fmt
         return fmt, kwargs
+
+
+class Pager(Drawable):
+    def __init__(self, region):
+        super(Pager, self).__init__(region)
+        self.lines = []
+
+    def add_line(self, fmt, *args, **kwargs):
+        wrap = kwargs.get('wrap', True)
+        self.vadd_line(fmt, args, kwargs, wrap=wrap)
+
+    def vadd_line(self, fmt, args, kwargs, wrap=True):
+        line = vformat_line(fmt, args, kwargs)
+        self.lines.append(line)
+
+    def _redraw(self):
+        self.region.clear()
+
+        for idx, line in enumerate(self.lines):
+            if idx >= self.region.height:
+                break
+            data = line.render(self.region.term, self.region.width)
+            self.term.move(self.region.x, self.region.y + idx)
+            self.term.write(data)

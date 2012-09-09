@@ -14,8 +14,6 @@ from amt.maildir import Maildir
 from amt.message import Message
 from amt import term
 from amt.term import widgets
-from amt.term.format import vformat_line
-from amt.term.widgets import Drawable
 
 
 class QuitError(Exception):
@@ -54,39 +52,23 @@ class MailIndex(widgets.ListSelection):
         return fmt, kwargs
 
 
-class MailPager(Drawable):
+class MailPager(widgets.Pager):
     def __init__(self, region, msg):
         super(MailPager, self).__init__(region)
         self.msg = msg
 
-        self.lines = []
-
-        def add_line(fmt, *args, **kwargs):
-            line = vformat_line(fmt, args, kwargs)
-            self.lines.append(line)
-
-        add_line('{+:red}From: {}', self.msg.from_addr)
-        add_line('{+:red}To: {}', self.msg.to)
-        add_line('{+:red}Cc: {}', self.msg.cc)
+        self.add_line('{+:red}From: {}', self.msg.from_addr)
+        self.add_line('{+:red}To: {}', self.msg.to)
+        self.add_line('{+:red}Cc: {}', self.msg.cc)
         time_str = time.ctime(self.msg.timestamp)
-        add_line('{+:cyan}Date: {}', time_str)
-        add_line('{+:green}Subject: {}', self.msg.subject)
-        add_line('')
+        self.add_line('{+:cyan}Date: {}', time_str)
+        self.add_line('{+:green}Subject: {}', self.msg.subject)
+        self.add_line('')
         for line in self.msg.body_text.splitlines():
-            add_line('{}', line)
-
-    def _redraw(self):
-        self.region.clear()
-
-        for idx, line in enumerate(self.lines):
-            if idx >= self.region.height:
-                break
-            data = line.render(self.region.term, self.region.width)
-            self.term.move(self.region.x, self.region.y + idx)
-            self.term.write(data)
+            self.add_line('{}', line)
 
 
-class MailMode(Drawable):
+class MailMode(widgets.Drawable):
     def __init__(self, region):
         super(MailMode, self).__init__(region)
 
