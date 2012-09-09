@@ -5,6 +5,8 @@
 from .err import MailDBError
 from . import interface
 
+from .. import message
+
 
 class Location(interface.Location):
     def __init__(self):
@@ -23,7 +25,7 @@ class Location(interface.Location):
 
 
 # TODO: We should probably have the Mailbox location be broken out separately.
-# TODO: We should support relative locations, where the MailDB contians a root
+# TODO: We should support relative locations, where the MailDB contains a root
 # path, and the Mailbox is relative to the MailDB root.
 class MaildirLocation(Location):
     SERIALIZE_PREFIX = b'MAILDIR:'
@@ -56,3 +58,6 @@ class MaildirLocation(Location):
 
     def __hash__(self):
         return hash(self.path)
+
+    def load_msg(self, msg_class=message.Message):
+        return msg_class.from_maildir(self.path)

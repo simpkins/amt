@@ -12,7 +12,8 @@ import whoosh.fields
 import whoosh.index
 
 from . import interface
-from .interface import MUID, TUID, Location, MUID_HEADER, TUID_HEADER
+from .interface import MUID, TUID, MUID_HEADER, TUID_HEADER
+from .location import Location
 from .err import *
 
 
