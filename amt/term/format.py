@@ -358,11 +358,15 @@ def format(term, fmt, *args, **kwargs):
 
 
 def vformat(term, fmt, args, kwargs, width=None, hfill=False):
-    line = vformat_line(term, fmt, args, kwargs, width=width, hfill=hfill)
+    line = vformat_line(fmt, args, kwargs, hfill=hfill)
     return line.render(term, width)
 
 
-def vformat_line(term, fmt, args, kwargs, width=None, hfill=False):
+def format_line(fmt, *args, **kwargs):
+    return vformat_line(fmt, args, kwargs, hfill=kwargs.get('hfill'))
+
+
+def vformat_line(fmt, args, kwargs, hfill=False):
     line = TextLine()
     for segment in _FormatParser(fmt, args, kwargs):
         line.segments.append(segment)

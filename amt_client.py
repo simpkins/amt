@@ -6,6 +6,7 @@ import argparse
 import functools
 import readline
 import sys
+import time
 
 import amt.config
 from amt.maildb import MailDB, MaildirLocation, Location
@@ -13,6 +14,7 @@ from amt.maildir import Maildir
 from amt.message import Message
 from amt import term
 from amt.term import widgets
+from amt.term.format import vformat_line
 from amt.term.widgets import Drawable
 
 
@@ -34,8 +36,8 @@ class MailIndex(widgets.ListSelection):
                                 'ORDER BY tuid')
         self.msgs = list(cursor)
 
-    def current_msg(self):
-        return self.msgs[self.cur_idx]
+    def current_muid(self):
+        return self.msgs[self.cur_idx][0]
 
     def get_num_items(self):
         return len(self.msgs)
@@ -57,8 +59,31 @@ class MailPager(Drawable):
         super(MailPager, self).__init__(region)
         self.msg = msg
 
+        self.lines = []
+
+        def add_line(fmt, *args, **kwargs):
+            line = vformat_line(fmt, args, kwargs)
+            self.lines.append(line)
+
+        add_line('{+:red}From: {}', self.msg.from_addr)
+        add_line('{+:red}To: {}', self.msg.to)
+        add_line('{+:red}Cc: {}', self.msg.cc)
+        time_str = time.ctime(self.msg.timestamp)
+        add_line('{+:cyan}Date: {}', time_str)
+        add_line('{+:green}Subject: {}', self.msg.subject)
+        add_line('')
+        for line in self.msg.body_text.splitlines():
+            add_line('{}', line)
+
     def _redraw(self):
         self.region.clear()
+
+        for idx, line in enumerate(self.lines):
+            if idx >= self.region.height:
+                break
+            data = line.render(self.region.term, self.region.width)
+            self.term.move(self.region.x, self.region.y + idx)
+            self.term.write(data)
 
 
 class MailMode(Drawable):
@@ -124,10 +149,13 @@ class MailMode(Drawable):
 
 
 class MessageMode(MailMode):
-    def __init__(self, region, mdb, msg):
+    def __init__(self, region, mdb, muid):
         super(MessageMode, self).__init__(region)
         self.mdb = mdb
-        self.msg = msg
+
+        locations = self.mdb.get_locations(muid)
+        self.msg = locations[0].load_msg()
+
         self.pager = MailPager(self.main_region, self.msg)
         self.init_bindings()
 
@@ -198,7 +226,7 @@ class IndexMode(MailMode):
         self.set_visible(False)
 
         msg_mode = MessageMode(self.region.region(0, 0), self.mdb,
-                               self.mail_index.current_msg())
+                               self.mail_index.current_muid())
         msg_mode.run()
 
         self.set_visible(True)
