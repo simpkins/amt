@@ -29,14 +29,11 @@ def committable(fn):
 
 
 class MailDB(interface.MailDB):
-    def __init__(self, path, widx):
-        self.path = path
+    def __init__(self, db, widx):
+        self.db = db
         self.widx = widx
 
         self._log = logging.getLogger('amt.maildb')
-
-        sqlite_path = os.path.join(path, 'maildb.sqlite')
-        self.db = sqlite3.connect(sqlite_path, isolation_level='DEFERRED')
 
         uid_prefix = self.get_config_value('uid_prefix').decode('ASCII')
         self.muid_prefix = uid_prefix + '_M'
@@ -50,7 +47,10 @@ class MailDB(interface.MailDB):
             raise MailDBError('no MailDB found at "%s"', path)
 
         widx = whoosh.index.open_dir(path)
-        return cls(path, widx)
+
+        sqlite_path = os.path.join(path, 'maildb.sqlite')
+        db = sqlite3.connect(sqlite_path, isolation_level='DEFERRED')
+        return cls(db, widx)
 
     @classmethod
     def create_db(cls, path):
@@ -71,13 +71,21 @@ class MailDB(interface.MailDB):
 
         widx = whoosh.index.create_in(path, schema)
 
-        cls.init_sqlite_db(path)
+        db = cls.init_sqlite_db(path)
 
-        return cls(path, widx)
+        return cls(db, widx)
+
+    @classmethod
+    def temporary_db(cls):
+        db = cls.init_sqlite_db(None)
+        return cls(db, None)
 
     @classmethod
     def init_sqlite_db(cls, path):
-        sqlite_path = os.path.join(path, 'maildb.sqlite')
+        if path is None:
+            sqlite_path = ':memory:'
+        else:
+            sqlite_path = os.path.join(path, 'maildb.sqlite')
 
         # Set the isolation_level to None.
         # Otherwise the python sqlite3 module will commit before each
@@ -142,6 +150,8 @@ class MailDB(interface.MailDB):
                    ('uid_prefix', uid_prefix))
 
         db.commit()
+
+        return db
 
     def get_config_value(self, key):
         cursor = self.db.execute('SELECT value FROM metadata WHERE key = ?',
