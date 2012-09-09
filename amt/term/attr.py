@@ -360,20 +360,28 @@ ATTR_FLAGS_CAP_OFF = {
 ATTRIBUTE_MODIFIERS = {
     'normal': AttributeModifier(off=AF_ALL_MASK,
                                 fg=COLOR_DEFAULT, bg=COLOR_DEFAULT),
-    'standout': A_STANDOUT,
-    'underline': A_UNDERLINE,
-    'reverse': A_REVERSE,
-    'blink': A_BLINK,
-    'dim': A_DIM,
-    'bold': A_BOLD,
-    'invis': A_INVIS,
-    'invisible': A_INVIS,
-    'protect': A_PROTECT,
-    'italic': A_ITALIC,
-    'shadow': A_SHADOW,
-    'superscript': A_SUPERSCRIPT,
-    'subscript': A_SUBSCRIPT,
 }
+
+_ATTRIBUTE_FLAG_NAMES = {
+    'standout': AF_STANDOUT,
+    'underline': AF_UNDERLINE,
+    'reverse': AF_REVERSE,
+    'blink': AF_BLINK,
+    'dim': AF_DIM,
+    'bold': AF_BOLD,
+    'invis': AF_INVIS,
+    'invisible': AF_INVIS,
+    'protect': AF_PROTECT,
+    'italic': AF_ITALIC,
+    'shadow': AF_SHADOW,
+    'superscript': AF_SUPERSCRIPT,
+    'subscript': AF_SUBSCRIPT,
+}
+
+for name, attr in _ATTRIBUTE_FLAG_NAMES.items():
+    ATTRIBUTE_MODIFIERS[name] = AttributeModifier(on=attr)
+    ATTRIBUTE_MODIFIERS['no_' + name] = AttributeModifier(off=attr)
+
 for name, color in NAMED_COLORS.items():
     ATTRIBUTE_MODIFIERS[name] = AttributeModifier(fg=color)
     ATTRIBUTE_MODIFIERS['fg='+name] = AttributeModifier(fg=color)
