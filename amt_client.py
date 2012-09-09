@@ -260,11 +260,11 @@ def create_tmp_maildb(maildir):
         def want_percentage(self):
             return True
 
-        def msg_import_starting(self, loc, idx, total):
-            sys.stdout.write('\r%d/%d %-60s' % (idx + 1, total, loc))
+        def msg_import_done(self, loc, msg, num, total):
+            sys.stdout.write('\r%d/%d %-60s' % (num, total, loc))
             sys.stdout.flush()
 
-        def import_done(self, loc, idx, total):
+        def import_done(self, total):
             sys.stdout.write('\n')
             sys.stdout.flush()
 
