@@ -36,6 +36,9 @@ class MailboxInfo:
         self.num_messages = None
         self.num_recent = None
 
+    def __str__(self):
+        return 'Mailbox(%s): %d messages' % (self.name, self.num_messages)
+
     def change_state(self, state):
         self.state = state
 
@@ -297,6 +300,60 @@ class Connection(ConnectionCore):
         desired_attrs = ['UID', 'FLAGS', 'INTERNALDATE', 'BODY.PEEK[]']
         attrs = self.uid_fetch_one(msg_id, desired_attrs)
         return fetch_response_to_msg(attrs)
+
+    def delete_msg(self, msg_ids, expunge_now=False):
+        self.add_flags(msg_ids, [FLAG_DELETED])
+        if expunge_now:
+            self.expunge()
+
+    def uid_delete_msg(self, msg_ids, expunge_now=False):
+        self.uid_add_flags(msg_ids, [FLAG_DELETED])
+        if expunge_now:
+            self.expunge()
+
+    def add_flags(self, msg_ids, flags):
+        '''
+        Add the specified flags to the specified message(s)
+        '''
+        self._update_flags('+FLAGS.SILENT', msg_ids, flags, use_uids=False)
+
+    def uid_add_flags(self, msg_ids, flags):
+        self._update_flags('+FLAGS.SILENT', msg_ids, flags, use_uids=True)
+
+    def remove_flags(self, msg_ids, flags):
+        '''
+        Remove the specified flags from the specified message(s)
+        '''
+        self._update_flags('-FLAGS.SILENT', msg_ids, flags, use_uids=False)
+
+    def uid_remove_flags(self, msg_ids, flags):
+        self._update_flags('-FLAGS.SILENT', msg_ids, flags, use_uids=True)
+
+    def replace_flags(self, msg_ids, flags):
+        '''
+        Replace the flags on the specified message(s) with the new list of
+        flags.
+        '''
+        self._update_flags('FLAGS.SILENT', msg_ids, flags, use_uids=False)
+
+    def uid_replace_flags(self, msg_ids, flags):
+        self._update_flags('FLAGS.SILENT', msg_ids, flags, use_uids=True)
+
+    def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
+        if isinstance(flags, str):
+            flags = [flags]
+        flags_arg = '(%s)' % ' '.join(flags)
+
+        msg_ids_arg = self._format_sequence_set(msg_ids)
+        if use_uids:
+            store_cmd = b'UID STORE'
+        else:
+            store_cmd = b'STORE'
+
+        self.run_cmd(store_cmd, msg_ids_arg, cmd, flags_arg)
+
+    def expunge(self):
+        self.run_cmd(b'EXPUNGE')
 
     def noop(self):
         self.run_cmd(b'NOOP')
