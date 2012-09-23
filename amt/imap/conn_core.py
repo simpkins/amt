@@ -236,8 +236,7 @@ class ConnectionCore:
             raise ImapError('unexpected response tag: %s', resp)
 
         if resp.resp_type != b'OK':
-            raise ImapError('command failed: %s %s',
-                            resp.resp_type, resp.text)
+            raise CmdError(resp)
 
     def wait_for_continuation_response(self, timeout=None):
         if timeout is None:

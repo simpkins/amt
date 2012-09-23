@@ -171,11 +171,7 @@ class Connection(ConnectionCore):
         else:
             cmd = b'SELECT'
 
-        if isinstance(mailbox, str):
-            # RFC 3501 states mailbox names should be 7-bit only
-            mailbox = mailbox.encode('ASCII', errors='strict')
-
-        mailbox_name = self.to_astring(mailbox)
+        mailbox_name = self._quote_mailbox_name(mailbox)
         self.run_cmd(cmd, mailbox_name)
 
         # The OK response should have included a READ-ONLY or READ-WRITE code.
@@ -196,6 +192,16 @@ class Connection(ConnectionCore):
 
         return self.mailbox
 
+    def create_mailbox(self, mailbox):
+        self.run_cmd(b'CREATE', self._quote_mailbox_name(mailbox))
+
+    def _quote_mailbox_name(self, mailbox):
+        if isinstance(mailbox, str):
+            # RFC 3501 states mailbox names should be 7-bit only
+            mailbox = mailbox.encode('ASCII', errors='strict')
+
+        return self.to_astring(mailbox)
+
     def search(self, criteria):
         return self._run_search(b'SEARCH', criteria)
 
@@ -209,21 +215,18 @@ class Connection(ConnectionCore):
 
         return search_response.msg_numbers
 
-    def list(self, name, reference=None):
-        return self._run_mailbox_list_cmd(b'LIST', name, reference)
+    def list_mailboxes(self, name, reference=''):
+        return self._run_mailbox_list_cmd(b'LIST', reference, name)
 
-    def lsub(self, name, reference=None):
-        return self._run_mailbox_list_cmd(b'LSUB', name, reference)
+    def lsub(self, name, reference=''):
+        return self._run_mailbox_list_cmd(b'LSUB', reference, name)
 
-    def _run_mailbox_list_cmd(self, cmd, name, reference):
-        if reference is None:
-            reference_arg = b'""'
-        else:
-            reference_arg = self.to_astring(reference)
-        name_arg = self.to_astring(name)
+    def _run_mailbox_list_cmd(self, cmd, reference, pattern):
+        reference_arg = self._quote_mailbox_name(reference)
+        pattern_arg = self._quote_mailbox_name(pattern)
 
         with self.untagged_handler(cmd) as list_handler:
-            self.run_cmd(cmd, reference_arg, name_arg)
+            self.run_cmd(cmd, reference_arg, pattern_arg)
 
         return list_handler.responses
 

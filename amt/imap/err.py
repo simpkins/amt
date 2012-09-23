@@ -15,6 +15,13 @@ class ImapError(Exception):
         return self.msg
 
 
+class CmdError(ImapError):
+    def __init__(self, resp):
+        super(CmdError, self).__init__('command failed: %s %s',
+                                       resp.resp_type, resp.text)
+        self.response = resp
+
+
 class ParseError(ImapError):
     def __init__(self, cmd_parts, msg=None, *args):
         self.cmd_parts = cmd_parts
