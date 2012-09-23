@@ -26,3 +26,7 @@ class ParseError(ImapError):
 
 class TimeoutError(ImapError):
     pass
+
+
+class EOFError(ImapError):
+    pass

@@ -11,7 +11,7 @@ import time
 
 from .. import ssl_util
 
-from .err import ImapError, TimeoutError
+from .err import *
 from .cmd_splitter import CommandSplitter
 from .constants import IMAP_PORT, IMAPS_PORT
 from .parse import parse_response
@@ -179,6 +179,8 @@ class ConnectionCore:
                 if ex.errno == errno.EAGAIN:
                     continue
                 raise
+            if not data:
+                raise EOFError('got EOF while waiting on response')
             self._parser.feed(data)
 
         resp = self._responses.pop(0)
