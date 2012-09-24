@@ -2,10 +2,7 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
-import base64
-import math
 import os
-import random
 import tempfile
 import time
 import unittest
@@ -13,16 +10,7 @@ import unittest
 from amt.maildb import MailDB, Location, MaildirLocation
 import amt.message
 
-
-SAMPLE_ADDRESSES = [
-    ('Alice', 'alice@example.com'),
-    ('Bob', 'bob@example.com'),
-    ('Carl', 'carl@example.com'),
-    ('David', 'david@example.com'),
-    ('Eugene', 'eugene@example.com'),
-    ('Frank', 'frank@example.com'),
-    ('Harry', 'harry@example.com'),
-]
+from test_util import *
 
 
 class MailDBTestCase(unittest.TestCase):
@@ -39,33 +27,6 @@ class MailDBTestCase(unittest.TestCase):
     def tearDownClass(cls):
         if cls.tmpdir is not None:
             cls.tmpdir.cleanup()
-
-    def random_string(self, length=16):
-        bytes_needed = 3 * math.ceil(length / 4)
-        data = os.urandom(bytes_needed)
-        b64data = base64.b64encode(data)[:length]
-        return b64data.decode('ASCII')
-
-    def new_message(self, subject=None, body=None, from_addr=None, to=None,
-                    **kwargs):
-        if subject is None:
-            subject = 'Sample subject ' + self.random_string()
-        if body is None:
-            lines = []
-            for n in range(random.randint(1, 15)):
-                line = 'Line %d: %s\n' % (n, self.random_string())
-            body = ''.join(lines)
-        if from_addr is None:
-            from_addr = random.choice(SAMPLE_ADDRESSES)
-        if to is None:
-            to = []
-            for n in range(random.randint(1, 5)):
-                addr = random.choice(SAMPLE_ADDRESSES)
-                to.append(addr)
-
-        return amt.message.new_message(subject=subject, body=body,
-                                       from_addr=from_addr, to=to,
-                                       **kwargs)
 
     def add_unique_tuid(self, tuid):
         cls = type(self)
@@ -183,7 +144,7 @@ class MailDBTests(MailDBTestCase):
         self.assertEqual(tuid1, tuid4)
 
     def test_import_with_header(self):
-        msg = self.new_message()
+        msg = random_message()
         # Import this message.
         # This will also update the msg object to add X-AMT-MUID and
         # X-AMT-TUID headers
@@ -195,7 +156,7 @@ class MailDBTests(MailDBTestCase):
         self.assertEqual(tuid1, tuid2)
 
     def test_labels(self):
-        msg = self.new_message()
+        msg = random_message()
         muid, tuid = self.db.import_msg(msg, commit=False)
 
         labels = self.db.get_labels(muid)
@@ -222,7 +183,7 @@ class MailDBTests(MailDBTestCase):
                          expected_details)
 
     def test_thread_labels(self):
-        msg = self.new_message()
+        msg = random_message()
         muid, tuid = self.db.import_msg(msg, commit=False)
 
         labels = self.db.get_thread_labels(tuid)
@@ -258,8 +219,8 @@ class MailDBTests(MailDBTestCase):
 
     def run_test_get_tuid_referenced(self, header):
         # Create two messages, where msg2 references msg1
-        msg1 = self.new_message()
-        msg2 = self.new_message()
+        msg1 = random_message()
+        msg2 = random_message()
         msg2.add_header(header, msg1.get_message_id())
 
         # Import msg1
@@ -276,8 +237,8 @@ class MailDBTests(MailDBTestCase):
 
     def run_test_get_tuid_referenced_reverse(self, header):
         # Create two messages, where msg2 references msg1
-        msg1 = self.new_message()
-        msg2 = self.new_message()
+        msg1 = random_message()
+        msg2 = random_message()
         msg2.add_header(header, msg1.get_message_id())
 
         # Import msg2 first
@@ -287,9 +248,9 @@ class MailDBTests(MailDBTestCase):
         muid1 = self.import_msg_in_thread(msg1, tuid2)
 
     def test_get_tuid_join_references(self):
-        msg1 = self.new_message()
-        msg2 = self.new_message()
-        msg3 = self.new_message()
+        msg1 = random_message()
+        msg2 = random_message()
+        msg3 = random_message()
 
         # msg3 references both msg2 and msg1
         refs3 = ' '.join((msg1.get_message_id(), msg2.get_message_id()))
@@ -337,7 +298,7 @@ class MailDBTests(MailDBTestCase):
             'message_id': '<test_import_dup_msg@example.com>',
         }
         msg1 = amt.message.new_message(**params)
-        msg2 = self.new_message()
+        msg2 = random_message()
 
         self.db.import_msg(msg1)
         self.db.import_msg(msg2)

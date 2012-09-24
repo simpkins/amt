@@ -7,7 +7,7 @@ import re
 
 from .err import ParseError
 
-_MONTHS = {
+_MONTHS_BY_NAME = {
     b'Jan': 1,
     b'Feb': 2,
     b'Mar': 3,
@@ -21,6 +21,7 @@ _MONTHS = {
     b'Nov': 11,
     b'Dec': 12,
 }
+_MONTHS_BY_NUM = dict((num, name) for name, num in _MONTHS_BY_NAME.items())
 
 
 class Response:
@@ -565,7 +566,7 @@ class ResponseParser:
             self.error('expected date-time, got "%s"', date_str)
 
         try:
-            month = _MONTHS[m.group('month')]
+            month = _MONTHS_BY_NAME[m.group('month')]
         except KeyError:
             self.error('invalid month "%s"', m.group('month'))
 

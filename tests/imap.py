@@ -10,6 +10,8 @@ import sys
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt import imap
 
+from test_util import *
+
 
 class Test:
     def __init__(self, name, suite):
@@ -36,6 +38,7 @@ class TestSuite:
         with self.test('create_conn'):
             self.conn = imap.Connection(self.args.server, self.args.port,
                                         ssl=False)
+
         with self.test('login'):
             self.conn.login(self.args.user, self.args.password)
 
@@ -44,6 +47,13 @@ class TestSuite:
             if not responses:
                 self.conn.create_mailbox(self.args.mailbox)
             self.conn.select_mailbox(self.args.mailbox)
+
+        with self.test('append'):
+            msg = random_message()
+            self.conn.append_msg(self.args.mailbox, msg)
+
+        with self.test('search'):
+            self.conn.search(b'ALL')
 
     def test(self, name):
         return Test(name, self)

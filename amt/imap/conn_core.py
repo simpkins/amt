@@ -2,6 +2,7 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import datetime
 import errno
 import logging
 import random
@@ -14,7 +15,19 @@ from .. import ssl_util
 from .err import *
 from .cmd_splitter import CommandSplitter
 from .constants import IMAP_PORT, IMAPS_PORT
-from .parse import parse_response
+from .parse import parse_response, _MONTHS_BY_NUM
+
+
+class Literal:
+    def __init__(self, data):
+        if not isinstance(data, (bytes, bytearray)):
+            raise ImapError('literal data must be bytes')
+        self.data = data
+
+    def __str__(self):
+        # throw, to catch the error if anyone ever accidentally
+        # tries simple string conversion on a Literal object
+        raise ImapError('attempted string conversion on a Literal')
 
 
 class ResponseStream:
@@ -124,15 +137,53 @@ class ConnectionCore:
         tag = self.send_request(command, *args, suppress_log=suppress_log)
         self.wait_for_response(tag)
 
+    def has_nonsynch_literals(self):
+        return b'LITERAL+' in self.get_capabilities()
+
     def send_request(self, command, *args, suppress_log=False):
         tag = self.get_new_tag()
+        args = (tag, command) + args
+        nonsynch = self.has_nonsynch_literals()
 
-        msg = b' '.join((tag, command) + args)
         if suppress_log:
             logging.debug('sending:  %r <args suppressed>', command)
-        else:
-            logging.debug('sending:  %r', msg)
-        self._sendall(msg + b'\r\n')
+
+        parts = []
+        cur_part = []
+        for arg in args:
+            cur_part.append(arg)
+            if isinstance(arg, Literal):
+                parts.append(cur_part)
+                cur_part = []
+        parts.append(cur_part)
+
+        for part in parts[:-1]:
+            literal = part[-1]
+
+            len_str = str(len(literal.data)).encode('ASCII')
+            if nonsynch:
+                part[-1] = b'{' + len_str + b'+}'
+            else:
+                part[-1] = b'{' + len_str + b'}'
+
+            data = b' '.join(part)
+            if not suppress_log:
+                logging.debug('sending:  %r', data)
+            self._sendall(data + b'\r\n')
+
+            if not nonsynch:
+                self.wait_for_response(b'+')
+
+            if not suppress_log:
+                logging.debug('sending %d bytes', len(literal.data))
+            self._sendall(literal.data)
+
+        part = parts[-1]
+        data = b' '.join(part)
+        if not suppress_log:
+            logging.debug('sending:  %r', data)
+        self._sendall(data + b'\r\n')
+
         return tag
 
     def send_line(self, data, timeout=None):
@@ -226,33 +277,19 @@ class ConnectionCore:
             if resp.tag == b'*':
                 continue
 
+            if resp.tag == tag:
+                break
+
             if resp.tag == b'+':
                 logging.debug('unexpected continuation response')
                 continue
 
-            if resp.tag == tag:
-                break
-
             raise ImapError('unexpected response tag: %s', resp)
 
-        if resp.resp_type != b'OK':
+        if tag != b'+' and resp.resp_type != b'OK':
             raise CmdError(resp)
 
-    def wait_for_continuation_response(self, timeout=None):
-        if timeout is None:
-            timeout = self.default_response_timeout
-        end_time = time.time() + timeout
-
-        while True:
-            resp = self._get_response(end_time)
-            if resp.tag == b'*':
-                continue
-
-            if resp.tag == b'+':
-                return resp
-
-            raise ImapError('unexpected tagged response when waiting on '
-                            'continuation response: %s', resp)
+        return resp
 
     def process_response(self, response):
         if response.tag == b'+':
@@ -319,12 +356,37 @@ class ConnectionCore:
         return self.to_quoted(value)
 
     def to_literal(self, value):
-        prefix = b'{' + bytes(str(len(value)), 'ASCII') + b'}\r\n'
-        return prefix + value
+        return Literal(value)
 
     def to_quoted(self, value):
         escaped = value.replace(b'\\', b'\\\\').replace(b'"', b'\\"')
         return b'"' + escaped + b'"'
+
+    def to_date_time(self, timestamp):
+        if not isinstance(timestamp, datetime.datetime):
+            timestamp = datetime.datetime.fromtimestamp(timestamp)
+
+        tz_offset = timestamp.utcoffset()
+        if tz_offset is None:
+            if time.daylight:
+                tz_offset = int(time.altzone / 60)
+            else:
+                tz_offset = int(time.timezone / 60)
+        if tz_offset < 0:
+            tz_sign = '-'
+            tz_offset = -tz_offset
+        else:
+            tz_sign = '+'
+        tz_hour = int(tz_offset / 60)
+        tz_min = int(tz_offset % 60)
+
+        month = _MONTHS_BY_NUM[timestamp.month].decode('ASCII',
+                                                       errors='strict')
+        params = (timestamp.day, month, timestamp.year,
+                  timestamp.hour, timestamp.minute, timestamp.second,
+                  tz_sign, tz_hour, tz_min)
+        s = '"%02d-%s-%04d %02d:%02d:%02d %s%02d%02d"' % params
+        return s.encode('ASCII', errors='strict')
 
     def _format_sequence_set(self, msg_ids):
         if isinstance(msg_ids, (list, tuple)):

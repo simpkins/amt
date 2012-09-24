@@ -358,6 +358,42 @@ class Connection(ConnectionCore):
     def expunge(self):
         self.run_cmd(b'EXPUNGE')
 
+    def append_msg(self, mailbox, msg):
+        args = []
+        args.append(self._quote_mailbox_name(mailbox))
+
+        imap_flags = self.get_imap_flags(msg)
+        imap_flags_str = b' '.join(f.encode('ASCII', errors='strict')
+                                   for f in imap_flags)
+        if imap_flags_str:
+            flags_arg = b'(' + imap_flags_str + b')'
+            args.append(flags_arg)
+
+        args.append(self.to_date_time(msg.datetime))
+        args.append(self.to_literal(msg.to_bytes()))
+
+        self.run_cmd(b'APPEND', *args)
+
+    def get_imap_flags(self, msg):
+        flags = set()
+
+        for flag in msg.flags:
+            if flag == message.Message.FLAG_SEEN:
+                flags.add(FLAG_SEEN)
+            elif flag == message.Message.FLAG_REPLIED_TO:
+                flags.add(FLAG_ANSWERED)
+            elif flag == message.Message.FLAG_FLAGGED:
+                flags.add(FLAG_FLAGGED)
+            elif flag == message.Message.FLAG_DELETED:
+                flags.add(FLAG_DELETED)
+            elif flag == message.Message.FLAG_DRAFT:
+                flags.add(FLAG_DRAFT)
+
+        for flag in msg.custom_flags:
+            flags.add(flag)
+
+        return flags
+
     def noop(self):
         self.run_cmd(b'NOOP')
 
