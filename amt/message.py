@@ -4,11 +4,13 @@
 #
 import base64
 import datetime
+import email.generator
 import email.header
 import email.message
 import email.parser
 import email.utils
 import hashlib
+import io
 import os
 import re
 import time
@@ -144,6 +146,12 @@ class Message:
         parser = email.parser.BytesParser()
         msg = parser.parsebytes(data)
         return cls(msg, timestamp, flags, custom_flags)
+
+    def to_bytes(self):
+        out_bytes = io.BytesIO()
+        gen = email.generator.BytesGenerator(out_bytes)
+        gen.flatten(self.msg)
+        return out_bytes.getvalue()
 
     def compute_maildir_info(self):
         '''
