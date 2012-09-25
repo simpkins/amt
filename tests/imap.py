@@ -5,12 +5,16 @@
 import argparse
 import logging
 import os
+import random
 import sys
 
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt import imap
 
 from test_util import *
+
+
+MAILBOX_PREFIX = 'amt_test'
 
 
 class Test:
@@ -34,23 +38,66 @@ class TestSuite:
         self.num_success = 0
         self.num_failure = 0
 
+    def login(self):
+        self.conn = imap.Connection(self.args.server, self.args.port,
+                                    ssl=False)
+        self.conn.login(self.args.user, self.args.password)
+
+    def clean(self):
+        self.login()
+
+        responses = self.conn.list_mailboxes(MAILBOX_PREFIX, '*')
+        for response in responses:
+            mbox_name = response.mailbox.decode('ASCII', errors='strict')
+            print(mbox_name)
+            self.conn.delete_mailbox(response.mailbox)
+
+    def rand_mbox_name(self, length=8):
+        choices = []
+        choices.extend(chr(n) for n in range(ord('a'), ord('z') + 1))
+        choices.extend(chr(n) for n in range(ord('A'), ord('Z') + 1))
+        choices.extend(chr(n) for n in range(ord('0'), ord('9') + 1))
+
+        rand_chars = []
+        for n in range(length):
+            idx = random.randint(0, len(choices))
+            rand_chars.append(choices[idx])
+        return ''.join(rand_chars)
+
     def run(self):
-        with self.test('create_conn'):
-            self.conn = imap.Connection(self.args.server, self.args.port,
-                                        ssl=False)
-
         with self.test('login'):
-            self.conn.login(self.args.user, self.args.password)
+            self.login()
 
+        with self.test('create_mailbox'):
+            # Get the mailbox delimiter
+            responses = self.conn.list_mailboxes('', '')
+            delim = responses[0].delimiter.decode('ASCII', errors='strict')
+
+            for num_tries in range(5):
+                suffix = self.rand_mbox_name()
+                mbox_name = '%s%s%s' % (MAILBOX_PREFIX, delim, suffix)
+                responses = self.conn.list_mailboxes('', mbox_name)
+                if not responses:
+                    break
+            else:
+                raise Exception('failed to pick unique mailbox name '
+                                'after 5 tries')
+
+            self.conn.create_mailbox(mbox_name)
+
+        try:
+            self.run_tests(mbox_name)
+        finally:
+            with self.test('delete_mailbox'):
+                self.conn.delete_mailbox(mbox_name)
+
+    def run_tests(self, mbox_name):
         with self.test('select'):
-            responses = self.conn.list_mailboxes(self.args.mailbox)
-            if not responses:
-                self.conn.create_mailbox(self.args.mailbox)
-            self.conn.select_mailbox(self.args.mailbox)
+            self.conn.select_mailbox(mbox_name)
 
         with self.test('append'):
             msg = random_message()
-            self.conn.append_msg(self.args.mailbox, msg)
+            self.conn.append_msg(mbox_name, msg)
 
         with self.test('search'):
             self.conn.search(b'ALL')
@@ -78,12 +125,17 @@ def main():
                     help='The username for connecting to the server')
     ap.add_argument('-P', '--password', required=True,
                     help='The password for connecting to the server')
-    ap.add_argument('-m', '--mailbox', default='amt_test',
-                    help='The mailbox to use for testing')
+    ap.add_argument('--clean', action='store_true', default=False,
+                    help='Clean test mailboxes from the server')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
-    TestSuite(args).run()
+
+    ts = TestSuite(args)
+    if args.clean:
+        ts.clean()
+    else:
+        ts.run()
 
 
 if __name__ == '__main__':

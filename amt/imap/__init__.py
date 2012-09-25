@@ -26,7 +26,8 @@ STATE_LOGOUT = 'logout'
 
 
 class MailboxInfo:
-    def __init__(self, name):
+    def __init__(self, conn, name):
+        self.conn = conn
         self.name = name
         self.state = None
         self.uidvalidity = None
@@ -36,11 +37,21 @@ class MailboxInfo:
         self.num_messages = None
         self.num_recent = None
 
+        self._register_handlers()
+
     def __str__(self):
         return 'Mailbox(%s): %d messages' % (self.name, self.num_messages)
 
     def change_state(self, state):
         self.state = state
+
+    def on_read_only(self, response):
+        self.change_state(STATE_READ_ONLY)
+        self.conn.change_state(STATE_READ_ONLY)
+
+    def on_read_write(self, response):
+        self.change_state(STATE_READ_WRITE)
+        self.conn.change_state(STATE_READ_WRITE)
 
     def on_flags(self, response):
         self.flags = response.flags
@@ -77,6 +88,34 @@ class MailboxInfo:
         # Reset num_recent to None, since we don't really know if
         # the expunged message was recent or not.
         self.num_recent = None
+
+    def _register_handlers(self):
+        conn = self.conn
+        conn.register_handler('FLAGS', self.on_flags)
+        conn.register_handler('EXISTS', self.on_exists)
+        conn.register_handler('RECENT', self.on_recent)
+        conn.register_handler('EXPUNGE', self.on_expunge)
+        conn.register_code_handler('READ-ONLY', self.on_read_only)
+        conn.register_code_handler('READ-WRITE', self.on_read_write)
+        conn.register_code_handler('UIDVALIDITY', self.on_uidvalidity)
+        conn.register_code_handler('UIDNEXT', self.on_uidnext)
+        conn.register_code_handler('UNSEEN', self.on_unseen)
+        conn.register_code_handler('HIGHESTMODSEQ', self.on_highest_mod_seq)
+        conn.register_code_handler('PERMANENTFLAGS', self.on_permanent_flags)
+
+    def unregister_handlers(self):
+        conn = self.conn
+        conn.unregister_handler('FLAGS', self.on_flags)
+        conn.unregister_handler('EXISTS', self.on_exists)
+        conn.unregister_handler('RECENT', self.on_recent)
+        conn.unregister_handler('EXPUNGE', self.on_expunge)
+        conn.unregister_code_handler('READ-ONLY', self.on_read_only)
+        conn.unregister_code_handler('READ-WRITE', self.on_read_write)
+        conn.unregister_code_handler('UIDVALIDITY', self.on_uidvalidity)
+        conn.unregister_code_handler('UIDNEXT', self.on_uidnext)
+        conn.unregister_code_handler('UNSEEN', self.on_unseen)
+        conn.unregister_code_handler('HIGHESTMODSEQ', self.on_highest_mod_seq)
+        conn.unregister_code_handler('PERMANENTFLAGS', self.on_permanent_flags)
 
 
 class Connection(ConnectionCore):
@@ -151,20 +190,7 @@ class Connection(ConnectionCore):
                             'one already selected')
 
         # Set self.mailbox, and register associated response handlers
-        self.mailbox = MailboxInfo(mailbox)
-        self.register_handler('FLAGS', self.mailbox.on_flags)
-        self.register_handler('EXISTS', self.mailbox.on_exists)
-        self.register_handler('RECENT', self.mailbox.on_recent)
-        self.register_handler('EXPUNGE', self.mailbox.on_expunge)
-        self.register_code_handler('READ-ONLY', self._on_read_only)
-        self.register_code_handler('READ-WRITE', self._on_read_write)
-        self.register_code_handler('UIDVALIDITY', self.mailbox.on_uidvalidity)
-        self.register_code_handler('UIDNEXT', self.mailbox.on_uidnext)
-        self.register_code_handler('UNSEEN', self.mailbox.on_unseen)
-        self.register_code_handler('HIGHESTMODSEQ',
-                                   self.mailbox.on_highest_mod_seq)
-        self.register_code_handler('PERMANENTFLAGS',
-                                   self.mailbox.on_permanent_flags)
+        self.mailbox = MailboxInfo(self, mailbox)
 
         if readonly:
             cmd = b'EXAMINE'
@@ -192,8 +218,19 @@ class Connection(ConnectionCore):
 
         return self.mailbox
 
+    def close_mailbox(self):
+        if self.mailbox is None:
+            raise ImapError('no mailbox open')
+
+        self.run_cmd(b'CLOSE')
+        self.mailbox.unregister_handlers()
+        self.mailbox = None
+
     def create_mailbox(self, mailbox):
         self.run_cmd(b'CREATE', self._quote_mailbox_name(mailbox))
+
+    def delete_mailbox(self, mailbox):
+        self.run_cmd(b'DELETE', self._quote_mailbox_name(mailbox))
 
     def _quote_mailbox_name(self, mailbox):
         if isinstance(mailbox, str):
@@ -202,20 +239,20 @@ class Connection(ConnectionCore):
 
         return self.to_astring(mailbox)
 
-    def search(self, criteria):
+    def search(self, *criteria):
         return self._run_search(b'SEARCH', criteria)
 
-    def uid_search(self, criteria):
+    def uid_search(self, *criteria):
         return self._run_search(b'UID SEARCH', criteria)
 
     def _run_search(self, cmd, criteria):
         with self.untagged_handler('SEARCH') as search_handler:
-            self.run_cmd(cmd, criteria)
+            self.run_cmd(cmd, *criteria)
             search_response = search_handler.get_exactly_one()
 
         return search_response.msg_numbers
 
-    def list_mailboxes(self, name, reference=''):
+    def list_mailboxes(self, reference, name):
         return self._run_mailbox_list_cmd(b'LIST', reference, name)
 
     def lsub(self, name, reference=''):
@@ -245,7 +282,7 @@ class Connection(ConnectionCore):
     def fetch(self, msg_ids, attributes):
         responses = self._run_fetch(b'FETCH', msg_ids, attributes)
 
-        return dict((resp.number, resp.attributes) for resp in resposes)
+        return dict((resp.number, resp.attributes) for resp in responses)
 
     def fetch_one(self, msg_id, attributes):
         assert not isinstance(msg_id, (list, tuple))
@@ -261,9 +298,9 @@ class Connection(ConnectionCore):
             # attribute in the response even if it wasn't explicitly included
             # in the request
             return dict((resp.attributes[b'UID'], resp.attributes)
-                        for resp in resposes)
+                        for resp in responses)
         else:
-            return dict((resp.number, resp.attributes) for resp in resposes)
+            return dict((resp.number, resp.attributes) for resp in responses)
 
     def uid_fetch_one(self, msg_id, attributes):
         assert not isinstance(msg_id, (list, tuple))
@@ -318,34 +355,35 @@ class Connection(ConnectionCore):
         '''
         Add the specified flags to the specified message(s)
         '''
-        self._update_flags('+FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=False)
 
     def uid_add_flags(self, msg_ids, flags):
-        self._update_flags('+FLAGS.SILENT', msg_ids, flags, use_uids=True)
+        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=True)
 
     def remove_flags(self, msg_ids, flags):
         '''
         Remove the specified flags from the specified message(s)
         '''
-        self._update_flags('-FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=False)
 
     def uid_remove_flags(self, msg_ids, flags):
-        self._update_flags('-FLAGS.SILENT', msg_ids, flags, use_uids=True)
+        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=True)
 
     def replace_flags(self, msg_ids, flags):
         '''
         Replace the flags on the specified message(s) with the new list of
         flags.
         '''
-        self._update_flags('FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=False)
 
     def uid_replace_flags(self, msg_ids, flags):
-        self._update_flags('FLAGS.SILENT', msg_ids, flags, use_uids=True)
+        self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=True)
 
     def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
         if isinstance(flags, str):
             flags = [flags]
         flags_arg = '(%s)' % ' '.join(flags)
+        flags_arg = flags_arg.encode('ASCII', errors='strict')
 
         msg_ids_arg = self._format_sequence_set(msg_ids)
         if use_uids:
