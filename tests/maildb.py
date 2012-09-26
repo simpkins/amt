@@ -3,14 +3,16 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 import os
+import sys
 import tempfile
 import time
 import unittest
 
+sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt.maildb import MailDB, Location, MaildirLocation
 import amt.message
 
-from test_util import *
+from tests.lib.util import *
 
 
 class MailDBTestCase(unittest.TestCase):

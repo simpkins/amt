@@ -11,7 +11,8 @@ import sys
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt import imap
 
-from test_util import *
+from tests.lib.imap_server import ImapServer
+from tests.lib.util import *
 
 
 MAILBOX_PREFIX = 'amt_test'
@@ -33,15 +34,15 @@ class Test:
 
 
 class TestSuite:
-    def __init__(self, args):
-        self.args = args
+    def __init__(self, account):
+        self.account = account
         self.num_success = 0
         self.num_failure = 0
 
     def login(self):
-        self.conn = imap.Connection(self.args.server, self.args.port,
+        self.conn = imap.Connection(self.account.server, self.account.port,
                                     ssl=False)
-        self.conn.login(self.args.user, self.args.password)
+        self.conn.login(self.account.user, self.account.password)
 
     def clean(self):
         self.login()
@@ -116,26 +117,42 @@ class TestSuite:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-s', '--server', required=True,
+    ap.add_argument('-s', '--server',
                     help='The server to connect to for testing')
-    ap.add_argument('-p', '--port', required=True,
-                    type=int,
+    ap.add_argument('-p', '--port', type=int,
                     help='The server port')
-    ap.add_argument('-u', '--user', required=True,
+    ap.add_argument('-u', '--user',
                     help='The username for connecting to the server')
-    ap.add_argument('-P', '--password', required=True,
+    ap.add_argument('-P', '--password',
                     help='The password for connecting to the server')
+    ap.add_argument('-S', '--ssl', type=bool, metavar='Y/N', default=None,
+                    help='Use SSL')
     ap.add_argument('--clean', action='store_true', default=False,
                     help='Clean test mailboxes from the server')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
 
-    ts = TestSuite(args)
-    if args.clean:
-        ts.clean()
+    if args.server:
+        if args.user is None or args.password is None:
+            ap.error('--user and --password are both required when '
+                     '--server is specified')
+        account = imap.Account(server=args.server, port=args.port,
+                               ssl=args.ssl, user=args.user,
+                               password=args.password)
+
+        ts = TestSuite(account)
+        if args.clean:
+            ts.clean()
+        else:
+            ts.run()
     else:
-        ts.run()
+        if args.clean:
+            ap.error('--clean can only be used with --server')
+
+        with ImapServer() as server:
+            ts = TestSuite(server.get_account())
+            ts.run()
 
 
 if __name__ == '__main__':

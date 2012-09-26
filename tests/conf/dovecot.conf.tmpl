@@ -1,0 +1,48 @@
+# Template Parameters:
+# @@base_dir@@
+# @@port@@
+# @@user@@
+# @@password@@
+
+# Name of this instance. Used to prefix all Dovecot processes in ps output.
+instance_name = amt_dovecot
+
+protocols = imap
+listen = 127.0.0.1
+ssl = no
+
+# Base directory where to store runtime data.
+base_dir = @@base_dir@@/base_dir
+log_path = @@base_dir@@/log
+info_log_path = @@base_dir@@/log
+mail_location = maildir:~/Maildir
+
+default_internal_user = @@user@@
+default_login_user = @@user@@
+
+userdb {
+  driver = static
+  args = home=@@base_dir@@/home/%u uid=@@user@@
+}
+passdb {
+  driver = static
+  args = password=@@password@@
+}
+
+service imap-login {
+  inet_listener imap {
+    port = @@port@@
+  }
+  #inet_listener imaps {
+  #  port = 1993
+  #  ssl = yes
+  #}
+}
+
+service anvil {
+  chroot =
+}
+
+service imap-login {
+  chroot =
+}

@@ -25,6 +25,39 @@ STATE_READ_WRITE = 'selected read-write'
 STATE_LOGOUT = 'logout'
 
 
+class Account:
+    def __init__(self, server, user, port=None, ssl=None, password=None):
+        """
+        Create a new IMAP Account object.
+
+        - If port and SSL are both None, they default to 993 and True.
+        - If the port is specified and ssl is None, ssl defaults to False
+          if the port is 143, and True in all other cases.
+        - If ssl is specified and port is None, the port defaults to 143
+          if ssl is disabled, and 993 if ssl is enabled.
+        """
+        if ssl is None:
+            if port is None:
+                ssl = True
+                port = IMAPS_PORT
+            elif port == IMAP_PORT:
+                ssl = False
+            else:
+                ssl = True
+        if port is None:
+            if ssl:
+                port = IMAPS_PORT
+            else:
+                port = IMAP_PORT
+
+        self.server = server
+        self.port = port
+        self.ssl = ssl
+
+        self.user = user
+        self.password = password
+
+
 class MailboxInfo:
     def __init__(self, conn, name):
         self.conn = conn
