@@ -55,22 +55,22 @@ class HandlerDict:
         self.handlers = {}
 
     def get_handlers(self, token):
-        if not isinstance(token, (bytes, bytearray)):
-            token = token.encode('ASCII', errors='strict')
+        token = self._canonical_token(token)
 
-        return self.handlers.get(token, [])
+        handlers = []
+        # Get the handlers for this token
+        handlers.extend(self.handlers.get(token, []))
+        # Also get the wildcard handlers
+        handlers.extend(self.handlers.get(None, []))
+        return handlers
 
     def register(self, token, handler):
-        if not isinstance(token, (bytes, bytearray)):
-            token = token.encode('ASCII', errors='strict')
-
+        token = self._canonical_token(token)
         token_handlers = self.handlers.setdefault(token, [])
         token_handlers.append(handler)
 
     def unregister(self, token, handler):
-        if not isinstance(token, (bytes, bytearray)):
-            token = token.encode('ASCII', errors='strict')
-
+        token = self._canonical_token(token)
         token_handlers = self.handlers.get(token)
         if not token_handlers:
             raise KeyError('no handler registered for %s' % token)
@@ -81,6 +81,11 @@ class HandlerDict:
                 return
 
         raise KeyError('unable to find specified handler for %s' % token)
+
+    def _canonical_token(self, token):
+        if isinstance(token, str):
+            return token.encode('ASCII', errors='strict')
+        return token
 
 
 class ConnectionCore:
@@ -124,6 +129,9 @@ class ConnectionCore:
         # Put the socket in non-blocking mode once we have established
         # the connection.
         self.sock.setblocking(False)
+
+    def close(self):
+        self.sock.close()
 
     def _on_response(self, response):
         self._responses.append(response)
@@ -369,16 +377,19 @@ class ConnectionCore:
         tz_offset = timestamp.utcoffset()
         if tz_offset is None:
             if time.daylight:
-                tz_offset = int(time.altzone / 60)
+                tz_seconds = -int(time.altzone / 60)
             else:
-                tz_offset = int(time.timezone / 60)
-        if tz_offset < 0:
+                tz_seconds = -int(time.timezone / 60)
+        else:
+            tz_seconds = tz_offset.total_seconds()
+
+        if tz_seconds < 0:
             tz_sign = '-'
-            tz_offset = -tz_offset
+            tz_seconds = -tz_seconds
         else:
             tz_sign = '+'
-        tz_hour = int(tz_offset / 60)
-        tz_min = int(tz_offset % 60)
+        tz_hour = int(tz_seconds / 60)
+        tz_min = int(tz_seconds % 60)
 
         month = _MONTHS_BY_NUM[timestamp.month].decode('ASCII',
                                                        errors='strict')

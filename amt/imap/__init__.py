@@ -483,7 +483,7 @@ class Connection(ConnectionCore):
         try:
             self._idling = True
             tag = self.send_request(b'IDLE')
-            self.wait_for_continuation_response()
+            self.wait_for_response(b'+')
             try:
                 self.wait_for_response(tag, timeout=timeout)
             except TimeoutError:
@@ -601,3 +601,9 @@ def fetch_response_to_msg(response):
 
     return message.Message.from_bytes(body, timestamp=timestamp, flags=flags,
                                       custom_flags=custom_flags)
+
+
+def login(account, class_=Connection):
+    conn = class_(account.server, account.port, ssl=account.ssl)
+    conn.login(account.user, account.password)
+    return conn

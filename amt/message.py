@@ -573,5 +573,9 @@ def new_message(subject, body, from_addr, to, cc=None,
     msg['Message-ID'] = message_id
 
     if timestamp is None:
-        timestamp = time.time()
-    return Message(msg, timestamp, flags=[], custom_flags=[])
+        if time.daylight:
+            tz_delta = datetime.timedelta(seconds=-time.altzone)
+        else:
+            tz_delta = datetime.timedelta(seconds=-time.timezone)
+        timestamp = datetime.datetime.now(tz=datetime.timezone(tz_delta))
+    return Message(msg, timestamp, flags=set(), custom_flags=set())
