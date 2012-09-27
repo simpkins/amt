@@ -352,9 +352,12 @@ class Message:
 
         # Hash the first 40 bytes of the first body part
         for part in self.iter_body_msgs():
-            payload = part.get_payload(decode=False)
-            if isinstance(payload, str):
-                payload = payload.encode('utf-8', 'surrogateescape')
+            # Decode the payload, so that the same body with a slightly
+            # different Content-Transfer-Encoding is still treated as the same
+            # message.  Some mail servers will change the body encoding
+            # slightly when storing a message.  This would affect the
+            # fingerprint if we used the encoded body here.
+            payload = part.get_payload(decode=True)
             h.update(payload[:40])
             break
 

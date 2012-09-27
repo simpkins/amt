@@ -16,6 +16,8 @@ from .util import random_string
 
 class ImapServer:
     def __init__(self):
+        self.tmpdir = None
+        self.process = None
         self.cleanup_dir = True
 
     def __enter__(self):
@@ -35,12 +37,27 @@ class ImapServer:
         logging.debug('starting dovecot in %s', self.tmpdir.name)
         cmd = ['dovecot', '-F', '-c', config_path]
         self.process = subprocess.Popen(cmd, cwd=self.tmpdir.name)
-        # Give dovecot time to start up and begin listening
-        time.sleep(1)
 
-        status = self.process.poll()
-        if status is not None:
-            raise Exception('dovecot failed to start: status=%s' % (status,))
+        # Wait until dovecot is started and accepting connections
+        self._wait_until_started()
+
+    def _wait_until_started(self):
+        for n in range(10):
+            try:
+                s = socket.create_connection(('127.0.0.1', self.port))
+                # Dovecot is accepting connections now.
+                s.close()
+                return
+            except socket.error:
+                # Not started yet.  Fall through and retry.
+                pass
+
+            status = self.process.poll()
+            if status is not None:
+                raise Exception('dovecot failed to start: status=%s'
+                                % (status,))
+
+            time.sleep(0.1)
 
     def get_account(self):
         account = imap.Account(server='127.0.0.1', port=self.port, ssl=False,
@@ -91,6 +108,10 @@ class ImapServer:
         return addr[1]
 
     def stop(self):
+        if self.tmpdir is None:
+            # Already stopped
+            return
+
         self.process.terminate()
         self.process.wait()
         if self.cleanup_dir:
@@ -98,3 +119,4 @@ class ImapServer:
         else:
             logging.debug('leaving dovecot directory %s', self.tmpdir.name)
             self.tmpdir.name = None
+        self.tmpdir = None

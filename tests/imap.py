@@ -222,7 +222,7 @@ class TestSuite:
             print('*** FAILED ***')
 
 
-class ImapTestCase(unittest.TestCase):
+class Tests(unittest.TestCase):
     def test(self):
         with ImapServer() as server:
             ts = TestSuite(server.get_account())

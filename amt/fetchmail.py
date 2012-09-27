@@ -8,147 +8,205 @@ from . import imap
 from .getpassword import get_password
 from .message import Message
 
+'''
+The fetchmail code is divided into 2 main pieces:
 
-class MailboxConfig:
+    - Scanner:
+      - enumerates the messages on the server
+      - decides which messages need to be fetched
+    - Processor:
+      - processes each message
+      - handles delivery to local mailboxes
+'''
+
+class NoMoreMessagesError(Exception):
     def __init__(self):
-        self.port = imap.IMAPS_PORT
-        self.password = None  # Must call prepare_password() to set
-
-    def init(self):
-        self.account.prepare_password()
-
-    def init_post_imap(self, conn):
-        pass
-
-    def prepare_password(self):
-        self.password = get_password(user=self.user, server=self.server,
-                                     protocol='imaps')
-
-    def should_process_msg(self, msg_uid):
-        # TODO: Possibly store a DB of already seen UIDs, so we can
-        # avoid re-downloading already processed messages without having to
-        # delete them or move them out of the mailbox?
-        return True
-
-    def process_msg(self, msg, processor):
-        pass
+        super(NoMoreMessagesError, self).__init__(self, 'no more messages')
 
 
-class MessageProcessor:
-    def __init__(self, msg, imap_conn, imap_uid):
+class ProcessorError(Exception):
+    def __init__(self, msg, ret):
+        err_msg = 'processor failed while processing message'
+        super(ProcessorError, self).__init__(self, err_msg)
         self.msg = msg
-        self.imap_conn = imap_conn
-        self.imap_uid = imap_uid
-
-    def copy_to(self, mailbox):
-        self.imap_conn.copy_msg(self.imap_uid, mailbox)
-
-    def delete_msg(self, expunge_now=False):
-        self.imap_conn.delete_msg(self.imap_uid, expunge_now=expunge_now)
+        self.ret = ret
 
 
-class MailProcessor:
-    def __init__(self, config):
-        self.config = config
-        self.config.init()
+class Processor:
+    def process_msg(self, msg):
+        '''
+        process_msg() is invoked by a Scanner to process the current message.
+
+        process_msg() must return True on success.  This informs the Scanner
+        that the message has been processed successfully, and the Scanner can
+        move on and process the next message.  (Note that some Scanners may
+        delete the message from the server after a successful call to
+        process_msg(), so process_msg() should only return True if the message
+        has really been handled successfully.)
+        '''
+        raise NotImplementedError('process_msg() must be implemented by '
+                                  'Processor subclasses')
+
+
+class Scanner:
+    '''
+    Scanner classes enumerate the messages on the server, and decide which
+    messages need to be fetched.  They pass the messages on to a processor to
+    handle local delivery.
+
+    The various scanner implementations implement different mechanisms of
+    deciding which messages to fetch.  Some scanner classes may delete the
+    messages or mark them read after they have been fetched.
+    '''
+    def __init__(self, account, mailbox, processor):
+        self.account = account
+        self.mailbox = mailbox
+        self.processor = processor
 
         self.conn = None
 
-    def run(self):
-        self.setup_conn()
-        self.config.init_post_imap(self.conn)
+    def open(self):
+        self.conn = imap.login(self.account)
+        self.conn.select_mailbox(self.mailbox, readonly=self.READONLY)
+        self._post_open()
 
-        # TODO: Implement IMAP IDLE support and/or polling
-        self.run_once()
-
-    def setup_conn(self):
-        self.conn = imap_util.Connection(self.config.server, self.config.port)
-        self.conn.login(self.config.user, self.config.password)
-        self.conn.select_mailbox(self.config.mailbox)
+    def close(self):
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def run_once(self):
-        msg_ids = self.conn.search_msg_ids('NOT DELETED')
-        logging.info('Fetching messages: mailbox has %d messages to consider',
-                     len(msg_ids))
+        raise NotImplementedError('run_once() must be implemented by '
+                                  'Scanner subclasses')
 
-        num_processed = 0
-        for uid in msg_ids:
-            if not self.config.should_process_msg(uid):
-                continue
+    def run_forever(self):
+        raise NotImplementedError('run_forever() must be implemented by '
+                                  'Scanner subclasses')
 
-            msg = self.conn.fetch_msg(uid)
-            processor = MessageProcessor(msg, self.conn, uid)
-            self.config.process_msg(msg, processor)
-            num_processed += 1
-
-        if num_processed > 0:
-            logging.info('Processed %d messages; expunging mailbox',
-                         num_processed)
-            self.conn.expunge()
-        else:
-            logging.info('No messages to process')
+    READONLY = False
 
 
-class ProcessorBase:
-    def __init__(self, config):
-        self.config = config
-        self.config.init()
+class SeqIDScanner(Scanner):
+    def _post_open(self):
+        self.current_msg = None
+        self.next_msg = 1
+        self.conn.register_handler('EXPUNGE', self._on_expunge)
 
-    def run(self):
-        self.setup_conn()
-        self.run_impl()
+    def _on_expunge(self, response):
+        if response.number == self.current_msg:
+            self.current_msg = None
+        elif response.number < self.current_msg:
+            self.current_msg -= 1
 
-    def setup_conn(self):
-        account = self.config.account
-        self.conn = imap.Connection(account.server, account.port)
-        self.conn.login(account.user, account.password)
-        self.conn.select_mailbox(self.config.mailbox)
+        if response.number < self.next_msg:
+            self.next_msg -= 1
 
-    def debug(self, msg, *args):
-        logging.debug(msg, *args)
+    def ensure_open(self):
+        if self.conn is None:
+            self.open()
+            return
 
+        # Send a NOOP to ensure we have an up-to-date message count
+        self.conn.noop()
 
-class SimpleProcessor(ProcessorBase):
-    '''
-    SimpleProcessor processes every message in the mailbox,
-    and assumes that processing always deletes the message from the mailbox.
-    '''
-    def run_impl(self):
+    def run_once(self):
+        self.ensure_open()
+        self._run_once()
+
+    def _run_once(self):
         while True:
-            self.process_mb()
+            try:
+                self.process_next_msg()
+            except NoMoreMessagesError:
+                return
 
-    def process_mb(self):
-        mb = self.conn.mailbox
+    def run_forever(self):
+        self.ensure_open()
 
-        while mb.num_messages == 0:
-            # Wait for new messages to arrive
+        while True:
+            self._run_once()
             self.conn.wait_for_exists()
 
-        # Process all messages in the mailbox
-        self.debug('Processing %d messages' % mb.num_messages)
-        while mb.num_messages > 0:
-            self.process_msg()
+    def process_next_msg(self):
+        assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
+        if self.next_msg > self.conn.mailbox.num_messages:
+            raise NoMoreMessagesError()
 
-    def process_msg(self):
-        # Fetch the first message
-        msg, uid = self.conn.fetch_msg(1)
+        self.current_msg = self.next_msg
+        msg = self.conn.fetch_msg(self.current_msg)
+        self.invoke_processor(msg)
 
-        # Compute the tags which should be applied to this message
-        tags = self.compute_tags(msg)
+    def msg_successful(self):
+        self.current_msg = None
+        self.next_msg += 1
 
-        # Copy the message to the backup mailbox
-        if self.backup_mailbox is not None:
-            self.conn.uid_copy(uid, self.backup_mailbox)
+    def msg_failed(self):
+        self.current_msg = None
 
-        # Modify our in-memory message to include the desired tags
-        self.apply_tags(msg, tags)
+    def invoke_processor(self, msg):
+        try:
+            ret = self.processor.process_msg(msg)
+            if ret != True:
+                raise ProcessorError(msg, ret)
+        except:
+            # FIXME: implement some sort of retry functionality
+            self.msg_failed()
+            raise
 
-        # Deliver the message to the desired mailboxes
-        TODO
+        self.msg_successful()
 
-        # Delete the message from this mailbox
-        TODO
-        # Given that we currently always fetch sequence ID 1,
-        # we need to expunge the mailbox now, too.
-        # It might be nicer to wait to expunge until we have finished one full
-        # loop and processed all of the messages in the mailbox.
+
+class FetchAllScanner(SeqIDScanner):
+    '''
+    - fetches all messages from the server
+    - does not delete the messages
+    - each time it is started, it re-fetches everything
+    - could possibly communicate with the Processor to avoid having to fetch
+      the full body if it is a duplicate
+    - useful for one-time only fetch
+    '''
+    READONLY = True
+
+
+class FetchAndDeleteScanner(SeqIDScanner):
+    '''
+    - fetches all messages from the server
+    - deletes messages after fetching
+    '''
+    def __init__(self, account, mailbox, processor):
+        raise NotImplementedError('FetchAndDeleteScanner '
+                                  'is not implemented yet')
+
+
+class FetchFlagScanner(SeqIDScanner):
+    '''
+    - marks messages with a flag after they have been fetched
+    - fetches all messages without this flag
+    '''
+    def __init__(self, account, mailbox, processor, flag):
+        raise NotImplementedError('FetchFlagScanner '
+                                  'is not implemented yet')
+
+
+class FetchUnreadScanner(FetchFlagScanner):
+    '''
+    - fetches all unread messages from the server
+    - marks messages read after scanning
+    '''
+    def __init__(self, account, mailbox, processor):
+        super(FetchUnreadScanner, self).__init__(self, account, mailbox,
+                                                 processor,
+                                                 flag=imap.FLAG_SEEN)
+
+
+class UidScanner(SeqIDScanner):
+    '''
+    - remembers which UIDs have already been seen
+    - throws an error if mailbox has UIDNOTSTICKY status
+    - throws an error if the UIDVALIDITY changes
+      - on UIDVALIDITY change, client must have some other means to detect
+        already downloaded messages.
+        - (MailDB can detect duplicate messages)
+    '''
+    def __init__(self, account, mailbox, processor):
+        raise NotImplementedError('UidScanner is not implemented yet')

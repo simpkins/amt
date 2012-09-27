@@ -8,7 +8,6 @@ import tempfile
 import time
 import unittest
 
-sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt.maildb import MailDB, Location, MaildirLocation
 import amt.message
 
@@ -40,7 +39,7 @@ class MailDBTestCase(unittest.TestCase):
         cls.known_tuids.add(tuid)
 
 
-class MailDBTests(MailDBTestCase):
+class Tests(MailDBTestCase):
     def test_import_dup(self):
         params = {
             'subject': 'test_import_dup()',
