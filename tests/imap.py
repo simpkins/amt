@@ -10,6 +10,7 @@ import queue
 import random
 import sys
 import threading
+import unittest
 
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt import imap
@@ -115,7 +116,9 @@ class TestSuite:
             self.assert_equal(msg_nums, [1])
 
         with self.test('fetch'):
+            # Fetch the message, and make sure the contents are identical
             fetched_msg = self.conn.fetch_msg(1)
+
             self.assert_equal(fetched_msg.to, msg.to)
             self.assert_equal(fetched_msg.cc, msg.cc)
             self.assert_equal(fetched_msg.from_addr, msg.from_addr)
@@ -125,6 +128,7 @@ class TestSuite:
             self.assert_le(abs(delta), datetime.timedelta(seconds=1))
             self.assert_equal(fetched_msg.flags, msg.flags)
             self.assert_equal(fetched_msg.custom_flags, set([b'\\Recent']))
+            self.assert_equal(fetched_msg.body_text, msg.body_text)
             self.assert_equal(fetched_msg.fingerprint(), msg.fingerprint())
 
         with self.test('delete'):
@@ -216,6 +220,13 @@ class TestSuite:
             print('Success!')
         else:
             print('*** FAILED ***')
+
+
+class ImapTestCase(unittest.TestCase):
+    def test(self):
+        with ImapServer() as server:
+            ts = TestSuite(server.get_account())
+            ts.run()
 
 
 def main():
