@@ -8,8 +8,12 @@ import logging
 import os
 import sqlite3
 
-import whoosh.fields
-import whoosh.index
+try:
+    import whoosh.fields
+    import whoosh.index
+    USE_WHOOSH = True
+except ImportError:
+    USE_WHOOSH = False
 
 from . import interface
 from .interface import MUID, TUID, MUID_HEADER, TUID_HEADER
@@ -41,38 +45,54 @@ class MailDB(interface.MailDB):
 
     @classmethod
     def open_db(cls, path):
-        # TODO: Make this code more robust to partially created/bad MailDB
-        # directories.
-        if not whoosh.index.exists_in(path):
+        sqlite_path = os.path.join(path, 'maildb.sqlite')
+        if not os.path.exists(sqlite_path):
             raise MailDBError('no MailDB found at "%s"', path)
 
-        widx = whoosh.index.open_dir(path)
+        uninit_path = os.path.join(path, '_creation_in_progress')
+        if os.path.exists(uninit_path):
+            raise MailDBError('MailDB at "%s" was only partially '
+                              'initialized.  It needs to be removed and '
+                              're-created.', path)
 
-        sqlite_path = os.path.join(path, 'maildb.sqlite')
+        widx = None
+        if USE_WHOOSH and whoosh.index.exists_in(path):
+            widx = whoosh.index.open_dir(path)
+
         db = sqlite3.connect(sqlite_path, isolation_level='DEFERRED')
         return cls(db, widx)
 
     @classmethod
     def create_db(cls, path):
-        # TODO: Make this code more robust to partially created/bad MailDB
-        # directories.
         os.makedirs(path)
 
-        schema = whoosh.fields.Schema(
-            muid=whoosh.fields.ID(stored=True, unique=True),
-            body=whoosh.fields.TEXT(stored=True),
-            subject=whoosh.fields.TEXT(stored=True),
-            date=whoosh.fields.DATETIME(stored=True),
-            to=whoosh.fields.TEXT(stored=True),
-            cc=whoosh.fields.TEXT(stored=True),
-        )
-        # 'from' is a keyword, so we have to add it separately
-        schema.add('from', whoosh.fields.TEXT(stored=True))
+        # Create a file to indicate that this MailDB directory isn't
+        # fully initialized yet.  We will remove this file as the last
+        # step of initialization.
+        uninit_path = os.path.join(path, '_creation_in_progress')
+        with open(uninit_path, 'w') as f:
+            f.write('This MailDB directory has not '
+                    'been fully initialized yet.')
 
-        widx = whoosh.index.create_in(path, schema)
+        if USE_WHOOSH:
+            schema = whoosh.fields.Schema(
+                muid=whoosh.fields.ID(stored=True, unique=True),
+                body=whoosh.fields.TEXT(stored=True),
+                subject=whoosh.fields.TEXT(stored=True),
+                date=whoosh.fields.DATETIME(stored=True),
+                to=whoosh.fields.TEXT(stored=True),
+                cc=whoosh.fields.TEXT(stored=True),
+            )
+            # 'from' is a keyword, so we have to add it separately
+            schema.add('from', whoosh.fields.TEXT(stored=True))
+
+            widx = whoosh.index.create_in(path, schema)
+        else:
+            widx = None
 
         db = cls.init_sqlite_db(path)
 
+        os.unlink(uninit_path)
         return cls(db, widx)
 
     @classmethod
