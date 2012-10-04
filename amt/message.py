@@ -63,11 +63,11 @@ class Message:
         self._subject = None
         for k, v in self.msg._headers:
             if k.lower() == 'to':
-                self._to.extend(self._parse_addresses(v))
+                self._to.extend(self._parse_addresses(k, v))
             elif k.lower() == 'cc':
-                self._cc.extend(self._parse_addresses(v))
+                self._cc.extend(self._parse_addresses(k, v))
             elif k.lower() == 'from':
-                self._from_addr.extend(self._parse_addresses(v))
+                self._from_addr.extend(self._parse_addresses(k, v))
             elif self._subject is None and k.lower() == 'subject':
                 self._subject_hdr = self._decode_header(k, v)
                 self._subject = str(self._subject_hdr)
@@ -366,8 +366,9 @@ class Message:
     def fingerprint(self):
         return base64.b64encode(self.binary_fingerprint())
 
-    def _parse_addresses(self, header):
-        return email.utils.getaddresses([header])
+    def _parse_addresses(self, hdr_name, raw_value):
+        header = self._decode_header(hdr_name, raw_value)
+        return email.utils.getaddresses([str(header)])
 
     def _compute_body_text(self):
         return '\n'.join(decode_payload(msg) for msg in self.iter_body_msgs())
