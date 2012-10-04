@@ -263,7 +263,7 @@ class ListSelection(Drawable):
                             'tuple or list')
         if kwargs is None:
             kwargs = {}
-        elif not isinstance(kwargs, dict):
+        elif not hasattr(kwargs, '__getitem__'):
             raise Exception('get_item_format() must return the kwargs as a '
                             'dictionary')
 

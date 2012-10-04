@@ -3,6 +3,7 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 import argparse
+import datetime
 import functools
 import readline
 import sys
@@ -25,18 +26,79 @@ class QuitModeError(Exception):
     pass
 
 
+class IndexMsg:
+    def __init__(self, muid, tuid, subject, from_name, from_addr, timestamp):
+        self.muid = muid
+        self.tuid = tuid
+        self.subject = subject
+        self.from_name = from_name
+        self.from_addr = from_addr
+        self.timestamp = timestamp
+        self._datetime = None
+
+    def datetime(self):
+        if self._datetime is None:
+            self._datetime = datetime.datetime.fromtimestamp(self.timestamp)
+        return self._datetime
+
+
+class MsgFormatArgs:
+    DOESNT_EXIST = object()
+    SHORT_MONTHS = [
+        'INVALID',
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ]
+
+    def __init__(self, idx, idx_msg):
+        self.idx = idx
+        self.idx_msg = idx_msg
+
+    def __getitem__(self, name):
+        result = getattr(self, name, self.DOESNT_EXIST)
+        if result != self.DOESNT_EXIST:
+            return result
+
+        result = self._compute_item(name)
+
+        setattr(self, name, result)
+        return result
+
+    def _compute_item(self, name):
+        if name == 'from':
+            result = self.idx_msg.from_name
+            if result:
+                return result
+            return self.idx_msg.from_addr
+        if name == 'subject':
+            # Replace folding whitespace with a single space
+            # TODO: We probably should have the message code do this
+            # automatically when parsing headers, since we want to do this in
+            # more places than just here.
+            return self.idx_msg.subject.replace('\n ', ' ')
+        if name == 'date':
+            return self._compute_date()
+
+        raise KeyError('no such item "%s"' % (name,))
+
+    def _compute_date(self):
+        dt = self.idx_msg.datetime()
+        return '%s %02d' % (self.SHORT_MONTHS[dt.month], dt.day)
+
+
 class MailIndex(widgets.ListSelection):
     def __init__(self, region, mdb):
         super(MailIndex, self).__init__(region)
         self.mdb = mdb
 
-        cursor = mdb.db.execute('SELECT muid, tuid, subject, timestamp '
-                                'FROM messages '
-                                'ORDER BY tuid')
-        self.msgs = list(cursor)
+        cursor = mdb.db.execute(
+                'SELECT muid, tuid, subject, from_name, from_addr, timestamp '
+                'FROM messages '
+                'ORDER BY tuid')
+        self.msgs = [IndexMsg(*items) for items in cursor]
 
     def current_muid(self):
-        return self.msgs[self.cur_idx][0]
+        return self.msgs[self.cur_idx].muid
 
     def get_num_items(self):
         return len(self.msgs)
@@ -45,8 +107,8 @@ class MailIndex(widgets.ListSelection):
         msg = self.msgs[item_idx]
 
         num_width = len(str(len(self.msgs)))
-        fmt = '{idx:red:>%d} {msg}' % (num_width,)
-        kwargs = {'idx': item_idx, 'msg': msg}
+        fmt = '{idx:red:>%d} {date::<6} {from::20.20} {subject}' % (num_width,)
+        kwargs = MsgFormatArgs(item_idx, msg)
 
         if selected:
             fmt = '{+:reverse}' + fmt
