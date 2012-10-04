@@ -120,6 +120,7 @@ class MailDB(interface.MailDB):
                    'muid INTEGER PRIMARY KEY AUTOINCREMENT, '
                    'tuid INTEGER, '
                    'message_id BLOB, subject BLOB, '
+                   'from_name BLOB, from_addr BLOB, '
                    'timestamp DATETIME, fingerprint BLOB)')
         db.execute('CREATE INDEX messages_by_message_id '
                    'ON messages (message_id)')
@@ -337,7 +338,8 @@ class MailDB(interface.MailDB):
             return None, None
 
         cursor = self.db.execute(
-            'SELECT tuid, message_id, subject, timestamp, fingerprint '
+            'SELECT tuid, message_id, subject, timestamp, '
+            'fingerprint '
             'FROM messages WHERE muid = ?',
             (muid,))
         results = list(cursor)
@@ -378,7 +380,8 @@ class MailDB(interface.MailDB):
                           'DB timestamp: %s, new timestamp: %s; '
                           'DB fingerprint: %s, new fingerpring: %s',
                           muid, db_msg_id, msg.get_message_id(),
-                          db_subject, msg.subject, db_timestamp, msg_timestamp,
+                          db_subject, msg.subject,
+                          db_timestamp, msg_timestamp,
                           db_fingerprint_b64, msg_fingerprint_b64)
 
         # TODO: If the Subject and Message-ID match, perhaps we should just
@@ -470,7 +473,7 @@ class MailDB(interface.MailDB):
         if fingerprint is None:
             fingerprint = msg.binary_fingerprint()
         cursor = self.db.execute(
-            'SELECT muid, tuid, message_id, subject, timestamp '
+            'SELECT muid, tuid, timestamp '
             'FROM messages WHERE fingerprint = ?',
             (fingerprint,))
         results = list(cursor)
@@ -485,7 +488,7 @@ class MailDB(interface.MailDB):
         if len(results) > 1:
             timestamp = int(msg.timestamp)
             for entry in results:
-                if entry[4] == timestamp:
+                if entry[2] == timestamp:
                     best_match = entry
                     break
 
@@ -506,20 +509,31 @@ class MailDB(interface.MailDB):
             tuid = self._search_for_tuid(msg, allocate=True)
         assert isinstance(tuid, TUID)
 
+        if msg.from_addr:
+            from_name = msg.from_addr[0][0]
+            from_addr = msg.from_addr[0][1]
+        else:
+            from_name = ''
+            from_addr = ''
+
         # Insert the message into the messages table
         if muid is None:
             cursor = self.db.execute(
                 'INSERT INTO messages '
-                '(tuid, message_id, subject, timestamp, fingerprint) '
-                'VALUES (?, ?, ?, ?, ?)',
-                (tuid, msg_id, msg.subject, timestamp, fingerprint))
+                '(tuid, message_id, subject, from_name, from_addr, '
+                'timestamp, fingerprint) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (tuid, msg_id, msg.subject, from_name, from_addr,
+                 timestamp, fingerprint))
             muid = self._muid_from_db(cursor.lastrowid)
         else:
             cursor = self.db.execute(
                 'INSERT INTO messages '
-                '(muid, tuid, message_id, subject, timestamp, fingerprint) '
-                'VALUES (?, ?, ?, ?, ?, ?)',
-                (muid, tuid, msg_id, msg.subject, timestamp, fingerprint))
+                '(muid, tuid, message_id, subject, from_name, from_addr, '
+                'timestamp, fingerprint) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (muid, tuid, msg_id, msg.subject, from_name, from_addr,
+                 timestamp, fingerprint))
 
         # Insert the Message-ID and all IDs referenced by this message
         # into the message_ids_to_thread table
