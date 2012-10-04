@@ -122,6 +122,7 @@ conjunction with terminal attributes:
 '''
 
 import math
+import re
 import string
 
 from .attr import *
@@ -147,14 +148,92 @@ class TextSegment:
     def get_value_pad_width(self, width):
         pass
 
+    CTRL_CHR_RE = re.compile('[\x00-\x1f]')
+    TAB_STOP = 8
+
+    @classmethod
+    def get_displayed_line(self, value):
+        '''
+        Take a unicode string, and compute info about the line that will be
+        displayed.
+
+        Returns a tuple containing (line, num_glyphs).
+
+        The returned line is a truncated version of the input string that
+        excludes any text that is not displayed on the same line.  (Any text
+        after a newline or other vertical separator is ignored.)
+
+        The num_glyphs contains the number of glyphs in the displayed line.
+        This is intended to be used to determine how many printable glyphs will
+        be displayed on the terminal line (for determining the line width).
+        '''
+        # TODO: Python doesn't have a good way to compute how many glyphs will
+        # be displayed, and which ones are separators that would move to the
+        # next line.
+        #
+        # To implement this properly we'll probably need to do this in C with
+        # ICU.
+        #
+        # As a best effort for now, just strip out control characters, and
+        # ignore anything after a newline, carriage return, form feed, or
+        # vertical tab.
+        parts = []
+        idx = 0
+
+        stripped = ''
+        num_glyphs = 0
+        while idx < len(value):
+            m = self.CTRL_CHR_RE.search(value, idx)
+            if not m:
+                if idx == 0:
+                    # Fast path for the common case
+                    stripped = value
+                    num_glyphs = len(value)
+                else:
+                    rest = value[idx:]
+                    parts.append(rest)
+                    num_glyphs += len(rest)
+                    stripped = ''.join(parts)
+                break
+
+            prefix = value[idx:m.start()]
+            parts.append(prefix)
+            num_glyphs += len(prefix)
+            idx = m.start() + 1
+
+            char = m.group(0)
+            if char in ('\n', '\v', '\f'):
+                stripped = ''.join(parts)
+                break
+            elif char == '\t':
+                # Append spaces until num_glyphs is a multiple of TAB_STOP
+                next_stop = ((1 + int(num_glyphs / self.TAB_STOP)) *
+                             self.TAB_STOP)
+                num_spaces = next_stop - num_glyphs
+                parts.append(' ' * num_spaces)
+                num_glyphs += num_spaces
+
+        return (stripped, num_glyphs)
+
+    @staticmethod
+    def truncate_value(value, width):
+        '''
+        Truncate the specified unicode string to the specified width (specified
+        as a number of displayed glyphs rather than number of characters).
+        '''
+        assert width <= len(value)
+        if width >= len(value):
+            return value
+        return value[:width]
+
 
 class FixedTextSegment(TextSegment):
     def __init__(self, value):
         super(FixedTextSegment, self).__init__()
 
-        self.value = value
-        self.min_width = len(self.value)
-        self.max_width = len(self.value)
+        self.value, num_glyphs = self.get_displayed_line(value)
+        self.min_width = num_glyphs
+        self.max_width = num_glyphs
 
         self.pad_precedence = 0
         self.pad_weight = 0
@@ -163,10 +242,7 @@ class FixedTextSegment(TextSegment):
         return self.value
 
     def get_value_min_width(self, width):
-        assert width <= len(self.value)
-        if width < len(self.value):
-            return self.value[:width]
-        return self.value
+        return self.truncate_value(self.value, width)
 
     def get_value_pad_width(self, width):
         assert width == len(self.value)
@@ -177,11 +253,12 @@ class VariableTextSegment(TextSegment):
     def __init__(self, value, attr, min_width=None, pad_weight=1):
         super(VariableTextSegment, self).__init__(attr)
 
-        self.value = value
+        self.value, num_glyphs = self.get_displayed_line(value)
+
         if min_width is None:
-            min_width = len(self.value)
-        self.min_width = min(min_width, len(self.value))
-        self.max_width = len(self.value)
+            min_width = num_glyphs
+        self.min_width = min(min_width, num_glyphs)
+        self.max_width = num_glyphs
 
         self.pad_precedence = 0
         self.pad_weight = pad_weight
@@ -191,25 +268,24 @@ class VariableTextSegment(TextSegment):
 
     def get_value_min_width(self, width):
         assert width <= self.min_width
-        return self.get_value(width)
+        return self.truncate_value(self.value, width)
 
     def get_value_pad_width(self, width):
         assert width >= self.min_width
-        return self.get_value(width)
-
-    def get_value(self, width):
-        assert width <= len(self.value)
-        if width >= len(self.value):
-            return self.value
-        return self.value[:width]
+        return self.truncate_value(self.value, width)
 
 
 class PaddingSegment(TextSegment):
-    def __init__(self, value=' ', min_width=1, default_width=4,
+    def __init__(self, value=None, min_width=1, default_width=4,
                  max_width=None, pad_weight=1, precedence=1):
         super(PaddingSegment, self).__init__()
 
-        self.value = value
+        if value is None:
+            self.value = ' '
+            self.value_width = 1
+        else:
+            self.value, self.value_width = self.get_displayed_line(value)
+
         self.min_width = min_width
         self.max_width = max_width
         self.default_width = default_width
@@ -227,16 +303,11 @@ class PaddingSegment(TextSegment):
         return self.get_value(width)
 
     def get_value(self, width):
-        if len(self.value) == 1:
+        if self.value_width == 1:
             return self.value * width
         else:
-            repititions = 1 + (width / len(self.value))
-            return (self.value * repititions)[:width]
-
-        assert width <= len(self.value)
-        if width < self.value:
-            return self.value[:width]
-        return self.value
+            repititions = 1 + (width / self.value_width)
+            return self.truncate_value(self.value * repititions, width)
 
 
 class TextLine:
