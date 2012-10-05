@@ -126,11 +126,12 @@ import re
 import string
 
 from .attr import *
+from . import unicode
 
 
-class TextSegment:
+class LineSegment:
     def __init__(self):
-        # Required attributes of all TextSegment objects
+        # Required attributes of all LineSegment objects
         self.attr_modifier = None
         self.permanent_attr = False
 
@@ -140,151 +141,79 @@ class TextSegment:
         self.pad_weight = 0
 
     def get_value_default_width(self):
-        pass
-
-    def get_value_min_width(self, width):
-        pass
-
-    def get_value_pad_width(self, width):
-        pass
-
-    CTRL_CHR_RE = re.compile('[\x00-\x1f]')
-    TAB_STOP = 8
-
-    @classmethod
-    def get_displayed_line(self, value):
         '''
-        Take a unicode string, and compute info about the line that will be
-        displayed.
+        Return the value using the default width.
 
-        Returns a tuple containing (line, num_glyphs).
-
-        The returned line is a truncated version of the input string that
-        excludes any text that is not displayed on the same line.  (Any text
-        after a newline or other vertical separator is ignored.)
-
-        The num_glyphs contains the number of glyphs in the displayed line.
-        This is intended to be used to determine how many printable glyphs will
-        be displayed on the terminal line (for determining the line width).
+        This function should return a tuple of (value, value_width),
+        where value_width is the width of the returned value.
         '''
-        # TODO: Python doesn't have a good way to compute how many glyphs will
-        # be displayed, and which ones are separators that would move to the
-        # next line.
-        #
-        # To implement this properly we'll probably need to do this in C with
-        # ICU.
-        #
-        # As a best effort for now, just strip out control characters, and
-        # ignore anything after a newline, carriage return, form feed, or
-        # vertical tab.
-        parts = []
-        idx = 0
+        raise NotImplementedError('get_value_default_width() must be '
+                                  'implemented by subclasses')
 
-        stripped = ''
-        num_glyphs = 0
-        while idx < len(value):
-            m = self.CTRL_CHR_RE.search(value, idx)
-            if not m:
-                if idx == 0:
-                    # Fast path for the common case
-                    stripped = value
-                    num_glyphs = len(value)
-                else:
-                    rest = value[idx:]
-                    parts.append(rest)
-                    num_glyphs += len(rest)
-                    stripped = ''.join(parts)
-                break
-
-            prefix = value[idx:m.start()]
-            parts.append(prefix)
-            num_glyphs += len(prefix)
-            idx = m.start() + 1
-
-            char = m.group(0)
-            if char in ('\n', '\v', '\f'):
-                stripped = ''.join(parts)
-                break
-            elif char == '\t':
-                # Append spaces until num_glyphs is a multiple of TAB_STOP
-                next_stop = ((1 + int(num_glyphs / self.TAB_STOP)) *
-                             self.TAB_STOP)
-                num_spaces = next_stop - num_glyphs
-                parts.append(' ' * num_spaces)
-                num_glyphs += num_spaces
-
-        return (stripped, num_glyphs)
-
-    @staticmethod
-    def truncate_value(value, width):
+    def get_value(self, width):
         '''
-        Truncate the specified unicode string to the specified width (specified
-        as a number of displayed glyphs rather than number of characters).
+        Return the value using the specified width.
+
+        This function should return a tuple of (value, value_width),
+        where value_width is the actual width of the returned value.
+
+        If self.max_width is not None, the specified width will never be
+        greater than the max width.
+
+        The formatting code will attempt to honor self.min_width, but may pass
+        in a value smaller than self.min_width when there is not enough room to
+        display the full value.
+
+        The returned width must never be larger than the input width.  As much
+        as possible it should equal the input width, but it may be smaller by a
+        few cells in cases where the string must be truncated before a
+        multi-cell wide character.
         '''
-        assert width <= len(value)
-        if width >= len(value):
-            return value
-        return value[:width]
+        raise NotImplementedError('get_value() must be '
+                                  'implemented by subclasses')
 
 
-class FixedTextSegment(TextSegment):
-    def __init__(self, value):
-        super(FixedTextSegment, self).__init__()
-
-        self.value, num_glyphs = self.get_displayed_line(value)
-        self.min_width = num_glyphs
-        self.max_width = num_glyphs
+class TextSegment(LineSegment):
+    def __init__(self, value, min_width=None, pad_weight=None):
+        super(TextSegment, self).__init__()
+        self.value, self.rendered_width = unicode.renderable_line(value)
+        self.min_width = self.rendered_width
+        self.max_width = self.rendered_width
 
         self.pad_precedence = 0
         self.pad_weight = 0
 
-    def get_value_default_width(self):
-        return self.value
-
-    def get_value_min_width(self, width):
-        return self.truncate_value(self.value, width)
-
-    def get_value_pad_width(self, width):
-        assert width == len(self.value)
-        return self.value
-
-
-class VariableTextSegment(TextSegment):
-    def __init__(self, value, attr, min_width=None, pad_weight=1):
-        super(VariableTextSegment, self).__init__(attr)
-
-        self.value, num_glyphs = self.get_displayed_line(value)
-
-        if min_width is None:
-            min_width = num_glyphs
-        self.min_width = min(min_width, num_glyphs)
-        self.max_width = num_glyphs
-
-        self.pad_precedence = 0
-        self.pad_weight = pad_weight
+        # If min_width is specified, this text segment can be truncated to
+        # allow other fields to take up more room.
+        #
+        # It will expand with other fields according to the pad weight
+        # and precedence.  (By default, truncated text fields have a pad
+        # precedence of 0, so they will fully expand before normal padding
+        # fields start expanding.)
+        if min_width is not None:
+            self.min_width = max(min(min_width, width), 0)
+            if pad_weight is None:
+                self.pad_weight = 1
+            else:
+                self.pad_weight = pad_weight
 
     def get_value_default_width(self):
-        return self.value
+        return self.value, self.rendered_width
 
-    def get_value_min_width(self, width):
-        assert width <= self.min_width
-        return self.truncate_value(self.value, width)
-
-    def get_value_pad_width(self, width):
-        assert width >= self.min_width
-        return self.truncate_value(self.value, width)
+    def get_value(self, width):
+        if width >= self.rendered_width:
+            return self.value, self.rendered_width
+        return unicode.renderable_line(self.value, max_width=width)
 
 
-class PaddingSegment(TextSegment):
+class PaddingSegment(LineSegment):
     def __init__(self, value=None, min_width=1, default_width=4,
                  max_width=None, pad_weight=1, precedence=1):
         super(PaddingSegment, self).__init__()
 
         if value is None:
-            self.value = ' '
-            self.value_width = 1
-        else:
-            self.value, self.value_width = self.get_displayed_line(value)
+            value = ' '
+        self.value, self.value_width = unicode.renderable_line(value)
 
         self.min_width = min_width
         self.max_width = max_width
@@ -296,18 +225,16 @@ class PaddingSegment(TextSegment):
     def get_value_default_width(self):
         return self.get_value(self.default_width)
 
-    def get_value_min_width(self, width):
-        return self.get_value(self.min_width)
-
-    def get_value_pad_width(self, width):
-        return self.get_value(width)
-
     def get_value(self, width):
         if self.value_width == 1:
-            return self.value * width
-        else:
-            repititions = 1 + (width / self.value_width)
-            return self.truncate_value(self.value * repititions, width)
+            # common case
+            return self.value * width, width
+
+        num_repititions = width / self.value_width
+        if int(num_repititions) == num_repititions:
+            return self.value * int(num_repititions)
+        line = self.value * (1 + int(num_repititions))
+        return unicode.renderable_line(line, width)
 
 
 class TextLine:
@@ -402,24 +329,24 @@ class TextLine:
 
     def get_default_widths(self):
         for segment in self.segments:
-            yield segment, segment.get_value_default_width()
+            value, width = segment.get_value_default_width()
+            yield segment, value
 
     def get_min_widths(self, width):
-        len_left = width
+        width_left = width
         for segment in self.segments:
-            segment_width = min(segment.min_width, len_left)
-            value = segment.get_value_min_width(segment_width)
-            len_left -= len(value)
-            assert len_left >= 0
+            segment_width = min(segment.min_width, width_left)
+            value, value_width = segment.get_value(segment_width)
+            width_left -= value_width
+            assert width_left >= 0
 
             yield segment, value
-            if len_left <= 0:
+            if width_left <= 0:
                 return
 
     def get_pad_widths(self, widths):
         for segment, width in zip(self.segments, widths):
-            value = segment.get_value_pad_width(width)
-            assert len(value) == width
+            value, actual_width = segment.get_value(width)
             yield segment, value
 
 
@@ -477,7 +404,7 @@ class _FormatParser:
         literal, field_name, format_spec, conversion = next(self.fmt_iter)
 
         if literal:
-            self.add_segment(FixedTextSegment(literal))
+            self.add_segment(TextSegment(literal))
         if field_name is None:
             return
 
@@ -543,7 +470,7 @@ class _FormatParser:
             return
 
         if field_name == '+':
-            segment = FixedTextSegment('')
+            segment = TextSegment('')
             segment.attr_modifier = term_attrs
             segment.permanent_attr = True
             self.add_segment(segment)
@@ -593,6 +520,6 @@ class _FormatParser:
         if format_spec:
             value = value.__format__(format_spec)
 
-        segment = FixedTextSegment(value)
+        segment = TextSegment(value)
         segment.attr_modifier = term_attrs
         self.add_segment(segment)
