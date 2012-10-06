@@ -26,14 +26,15 @@ class MailPager(widgets.Pager):
 
 
 class MessageMode(MailMode):
-    def __init__(self, region, mdb, muid):
+    def __init__(self, region, mdb, msgs):
         super(MessageMode, self).__init__(region)
         self.mdb = mdb
+        self.msgs = msgs
 
-        locations = self.mdb.get_locations(muid)
-        self.msg = locations[0].load_msg()
+        self.idx_msg = self.msgs.current_msg()
+        full_msg = self.idx_msg.msg
 
-        self.pager = MailPager(self.main_region, self.msg)
+        self.pager = MailPager(self.main_region, full_msg)
         self.init_bindings()
 
     def init_bindings(self):

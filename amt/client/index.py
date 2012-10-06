@@ -9,14 +9,16 @@ import amt.term
 from amt.term import widgets
 
 from .mode import MailMode
+from .msg import MsgFormatArgs, MsgListSubscriber
 from .pager import MessageMode
 
 
 class IndexMode(MailMode):
-    def __init__(self, region, mdb):
+    def __init__(self, region, mdb, msgs):
         super(IndexMode, self).__init__(region)
         self.mdb = mdb
-        self.mail_index = MailIndex(self.main_region, self.mdb)
+        self.msgs = msgs
+        self.mail_index = MailIndex(self.main_region, self.msgs)
         self.init_bindings()
 
     def init_bindings(self):
@@ -44,19 +46,21 @@ class IndexMode(MailMode):
         self.clear_msg(flush=False)
 
     def cmd_move_down(self):
-        self.mail_index.move_down()
+        self.msgs.move(1)
 
     def cmd_move_up(self):
-        self.mail_index.move_up()
+        self.msgs.move(-1)
 
     def cmd_page_down(self):
-        self.mail_index.page_down()
+        amount = self.mail_index.get_page_lines()
+        self.msgs.move(amount)
 
     def cmd_page_up(self):
-        self.mail_index.page_up()
+        amount = -self.mail_index.get_page_lines()
+        self.msgs.move(amount)
 
     def cmd_goto_last(self):
-        self.mail_index.goto(-1)
+        self.msgs.goto(-1)
 
     def cmd_redraw(self):
         self.redraw()
@@ -64,8 +68,7 @@ class IndexMode(MailMode):
     def cmd_show_msg(self):
         self.set_visible(False)
 
-        msg_mode = MessageMode(self.region.region(0, 0), self.mdb,
-                               self.mail_index.current_muid())
+        msg_mode = MessageMode(self.region.region(0, 0), self.mdb, self.msgs)
         msg_mode.run()
 
         self.set_visible(True)
@@ -79,11 +82,11 @@ class IndexMode(MailMode):
             self.user_msg('Invalid message number {!r}', line)
             return
 
-        if idx < 0 or idx >= self.mail_index.get_num_items():
+        if idx < 0 or idx >= len(self.msgs):
             self.user_msg('Invalid message number {}', idx)
             return
 
-        self.mail_index.goto(idx)
+        self.msgs.goto(idx)
 
     def cmd_read_cmd(self, first_char=None):
         line = self.readline(': ')
@@ -91,16 +94,11 @@ class IndexMode(MailMode):
         self.user_msg('got line: {!r}', line)
 
 
-class MailIndex(widgets.ListSelection):
-    def __init__(self, region, mdb):
+class MailIndex(widgets.ListSelection, MsgListSubscriber):
+    def __init__(self, region, msgs):
         super(MailIndex, self).__init__(region)
-        self.mdb = mdb
-
-        cursor = mdb.db.execute(
-                'SELECT muid, tuid, subject, from_name, from_addr, timestamp '
-                'FROM messages '
-                'ORDER BY tuid')
-        self.msgs = [IndexMsg(*items) for items in cursor]
+        self.msgs = msgs
+        self.msgs.add_subscriber(self)
 
     def current_muid(self):
         return self.msgs[self.cur_idx].muid
@@ -113,68 +111,13 @@ class MailIndex(widgets.ListSelection):
 
         num_width = len(str(len(self.msgs)))
         fmt = '{idx:red:>%d} {date::<6} {from::20.20} {subject}' % (num_width,)
-        kwargs = MsgFormatArgs(item_idx, msg)
 
         if selected:
             fmt = '{+:reverse}' + fmt
-        return fmt, kwargs
+        return fmt, MsgFormatArgs(item_idx, msg)
 
+    def msg_index_changed(self):
+        self.goto(self.msgs.cur_idx, flush=True)
 
-class IndexMsg:
-    def __init__(self, muid, tuid, subject, from_name, from_addr, timestamp):
-        self.muid = muid
-        self.tuid = tuid
-        self.subject = subject
-        self.from_name = from_name
-        self.from_addr = from_addr
-        self.timestamp = timestamp
-        self._datetime = None
-
-    def datetime(self):
-        if self._datetime is None:
-            self._datetime = datetime.datetime.fromtimestamp(self.timestamp)
-        return self._datetime
-
-
-class MsgFormatArgs:
-    DOESNT_EXIST = object()
-    SHORT_MONTHS = [
-        'INVALID',
-        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ]
-
-    def __init__(self, idx, idx_msg):
-        self.idx = idx
-        self.idx_msg = idx_msg
-
-    def __getitem__(self, name):
-        result = getattr(self, name, self.DOESNT_EXIST)
-        if result != self.DOESNT_EXIST:
-            return result
-
-        result = self._compute_item(name)
-
-        setattr(self, name, result)
-        return result
-
-    def _compute_item(self, name):
-        if name == 'from':
-            result = self.idx_msg.from_name
-            if result:
-                return result
-            return self.idx_msg.from_addr
-        if name == 'subject':
-            # Replace folding whitespace with a single space
-            # TODO: We probably should have the message code do this
-            # automatically when parsing headers, since we want to do this in
-            # more places than just here.
-            return self.idx_msg.subject.replace('\n ', ' ')
-        if name == 'date':
-            return self._compute_date()
-
-        raise KeyError('no such item "%s"' % (name,))
-
-    def _compute_date(self):
-        dt = self.idx_msg.datetime()
-        return '%s %02d' % (self.SHORT_MONTHS[dt.month], dt.day)
+    def msg_list_changed(self):
+        pass

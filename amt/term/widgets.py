@@ -2,8 +2,9 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+from ..containers import WeakrefSet
+
 from .terminal import Region
-from .util import WeakrefContainer
 from .format import vformat_line
 
 
@@ -21,7 +22,7 @@ class Drawable:
             self.__region = param.region
 
         self.__visible = True
-        self.__children = WeakrefContainer()
+        self.__children = WeakrefSet()
         self.__region.on_resize = self._on_resize
 
         if self.__parent:
@@ -129,13 +130,23 @@ class ListSelection(Drawable):
     def move_up(self, amount=1, flush=True):
         self.move(-amount, flush=flush)
 
+    def get_page_lines(self, pct=1.0):
+        '''
+        Get the number of lines needed to move by the specified percentage of a
+        page.
+
+        This never returns 0 unless the input percentage is exactly 0.  If the
+        amount would be only a fraction of a line, it rounds up to one line.
+        '''
+        line_amount = int(self.region.height * pct)
+        if pct > 0 and line_amount == 0:
+            return 1
+        elif pct < 0 and line_amount == 0:
+            return -1
+        return line_amount
+
     def page_down(self, amount=1.0, flush=True):
-        line_amount = int(self.region.height * amount)
-        if amount > 0 and line_amount == 0:
-            line_amount = 1
-        elif amount < 0 and line_amount == 0:
-            line_amount = -1
-        self.move(line_amount, flush=flush)
+        self.move(self.get_page_lines(amount), flush=flush)
 
     def page_up(self, amount=1.0, flush=True):
         self.page_down(-amount, flush=flush)

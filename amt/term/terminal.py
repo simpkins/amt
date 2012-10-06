@@ -37,8 +37,8 @@ import termios
 import sys
 from contextlib import contextmanager
 
+from ..containers import WeakrefSet
 from .attr import *
-from .util import WeakrefContainer
 from . import keys
 from . import format
 
@@ -338,7 +338,7 @@ class Terminal:
 
 class RegionContainer:
     def __init__(self):
-        self._regions = WeakrefContainer()
+        self._regions = WeakrefSet()
 
     def new_region(self, term, parent, x, y, width, height):
         region = Region(term, parent, x, y, width, height)
