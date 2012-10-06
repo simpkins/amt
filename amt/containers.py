@@ -37,7 +37,9 @@ class WeakrefSet:
         raise KeyError('no such item in the container')
 
     def __iter__(self):
-        for ref in self.__items.values():
+        # Copy the values in case they change while we are iterating
+        weak_refs = list(self.__items.values())
+        for ref in weak_refs:
             item = ref()
             if item is not None:
                 yield item

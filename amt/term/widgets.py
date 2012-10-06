@@ -310,6 +310,9 @@ class Pager(Drawable):
         super(Pager, self).__init__(region)
         self.lines = []
 
+    def clear_lines(self):
+        self.lines = []
+
     def add_line(self, fmt, *args, **kwargs):
         wrap = kwargs.get('wrap', True)
         self.vadd_line(fmt, args, kwargs, wrap=wrap)

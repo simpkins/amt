@@ -27,7 +27,12 @@ class MailMode(widgets.Drawable):
             try:
                 self.process_key(ch)
             except QuitModeError:
+                self.leave_mode()
+                self.visible = False
                 return
+
+    def leave_mode(self):
+        pass
 
     def process_key(self, key):
         cmd = self.key_bindings.get(key)
