@@ -35,6 +35,24 @@ class IndexMsg:
         return self._datetime
 
 
+class IndexThread:
+    def __init__(self, msg):
+        self.tuid = msg.tuid
+        self.start_time = msg.timestamp
+        self.end_time = msg.timestamp
+        self.msgs = [msg]
+
+    def add_msg(self, msg):
+        assert msg.tuid == self.tuid
+        self.start_time = min(self.start_time, msg.timestamp)
+        self.end_time = max(self.end_time, msg.timestamp)
+        self.msgs.append(msg)
+
+    def resolve_msg_tree(self):
+        # TODO: figure out parent/child and sibling relationships
+        self.msgs.sort(key=lambda m: m.timestamp)
+
+
 class MsgListSubscriber:
     def msg_list_changed(self):
         '''
@@ -51,16 +69,48 @@ class MsgListSubscriber:
 
 
 class MsgList:
-    def __init__(self, msgs):
-        self.msgs = msgs
+    def __init__(self, mdb):
+        self.mdb = mdb
         self.__cur_idx = 0
         self.subscribers = WeakrefSet()
+
+        self._load_msgs()
+
+    def _load_msgs(self):
+        cursor = self.mdb.db.execute(
+                'SELECT muid, tuid, subject, from_name, from_addr, timestamp '
+                'FROM messages '
+                'ORDER BY tuid')
+        msgs = [IndexMsg(self.mdb, *items) for items in cursor]
+        self.threads = []
+
+        current_thread = None
+        for msg in msgs:
+            if current_thread is None:
+                current_thread = IndexThread(msg)
+            elif msg.tuid == current_thread.tuid:
+                current_thread.add_msg(msg)
+            else:
+                self.threads.append(current_thread)
+                current_thread = IndexThread(msg)
+
+        if current_thread is not None:
+            self.threads.append(current_thread)
+
+        self.threads.sort(key=lambda t: t.end_time)
+        self.msgs = []
+        for thread in self.threads:
+            thread.resolve_msg_tree()
+            for msg in thread.msgs:
+                self.msgs.append(msg)
 
     @property
     def cur_idx(self):
         return self.__cur_idx
 
     def current_msg(self):
+        if not self.msgs:
+            return None
         return self.msgs[self.__cur_idx]
 
     def __len__(self):
