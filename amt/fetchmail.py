@@ -134,11 +134,11 @@ class SeqIDScanner(Scanner):
 
         self.current_msg = self.next_msg
         msg = self.conn.fetch_msg(self.current_msg)
+        self.next_msg += 1
         self.invoke_processor(msg)
 
     def msg_successful(self):
         self.current_msg = None
-        self.next_msg += 1
 
     def msg_failed(self):
         self.current_msg = None
@@ -173,9 +173,10 @@ class FetchAndDeleteScanner(SeqIDScanner):
     - fetches all messages from the server
     - deletes messages after fetching
     '''
-    def __init__(self, account, mailbox, processor):
-        raise NotImplementedError('FetchAndDeleteScanner '
-                                  'is not implemented yet')
+    def msg_successful(self):
+        if self.current_msg is not None:
+            self.conn.delete_msg(self.current_msg, expunge_now=True)
+        super().msg_successful()
 
 
 class FetchFlagScanner(SeqIDScanner):

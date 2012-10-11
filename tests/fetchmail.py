@@ -73,8 +73,7 @@ class Tests(unittest.TestCase):
         # different.
         self.assertEqual(msg1.fingerprint(), msg2.fingerprint())
 
-    def test_fetch_all(self):
-        mbox_name = 'test_fetch_all'
+    def simple_scanner_test(self, mbox_name, scanner_class):
         self.create_mailbox(mbox_name)
 
         # Add 10 messages
@@ -82,8 +81,8 @@ class Tests(unittest.TestCase):
 
         # Fetch the messages, and make sure we get all of the messages
         processor = RecordProcessor()
-        scanner = fetchmail.FetchAllScanner(self.server.get_account(),
-                                            mbox_name, processor)
+        scanner = scanner_class(self.server.get_account(),
+                                mbox_name, processor)
         scanner.run_once()
         self.assertEqual(len(msgs), len(processor.msgs))
         for orig, fetched in itertools.zip_longest(msgs, processor.msgs):
@@ -96,3 +95,38 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(more_msgs), len(processor.msgs))
         for orig, fetched in itertools.zip_longest(more_msgs, processor.msgs):
             self.assert_msg_equal(orig, fetched)
+
+        return msgs + more_msgs
+
+    def test_fetch_all(self):
+        mbox_name = 'test_fetch_all'
+        msgs = self.simple_scanner_test(mbox_name, fetchmail.FetchAllScanner)
+
+        # The FetchAllScanner leaves the messages in place.
+        # Therefore if we create a new scanner it should still see all 20
+        # messages.
+        processor = RecordProcessor()
+        scanner = fetchmail.FetchAllScanner(self.server.get_account(),
+                                            mbox_name, processor)
+        scanner.run_once()
+        self.assertEqual(len(msgs), len(processor.msgs))
+        for orig, fetched in itertools.zip_longest(msgs, processor.msgs):
+            self.assert_msg_equal(orig, fetched)
+
+    def test_fetch_and_delete(self):
+        mbox_name = 'test_fetch_and_delete'
+        self.simple_scanner_test(mbox_name, fetchmail.FetchAndDeleteScanner)
+
+        # The FetchAndDeleteScanner deletes each message after it is processed.
+        # Therefore the mailbox should no longer contain any messages.
+        with self.get_conn() as conn:
+            conn.select_mailbox(mbox_name)
+            mbox_contents = conn.search(b'ALL')
+        self.assertFalse(mbox_contents)
+
+        # Make sure a new FetchAndDeleteScanner doesn't see any messages
+        processor = RecordProcessor()
+        scanner = fetchmail.FetchAndDeleteScanner(self.server.get_account(),
+                                                  mbox_name, processor)
+        scanner.run_once()
+        self.assertFalse(processor.msgs)
