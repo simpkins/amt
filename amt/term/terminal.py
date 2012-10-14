@@ -58,6 +58,7 @@ class Terminal:
         self.on_resize = None
         self._regions = RegionContainer()
         self.root = None
+        self.clear_on_resize = True
 
         self._keypad_on = False
         self._term_modes = []
@@ -111,6 +112,13 @@ class Terminal:
     def recompute_size(self):
         self._width, self._height = self._get_dimensions()
         self._regions.recompute_sizes()
+
+        # Clear the terminal.  Resizing the terminal will generally cause
+        # it to look messed-up, since lines will wrap in unintended ways.
+        # We typically need to clear the entire screen, and then let the
+        # on_resize() methods redraw everything
+        if self.clear_on_resize:
+            self.clear()
 
         # Call the on_resize() callback after our size and all of the
         # regions sizes have been updated.
