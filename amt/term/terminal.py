@@ -409,6 +409,10 @@ class Region:
 
         self._regions.invoke_on_resize()
 
+    def move(self, x, y):
+        abs_x, abs_y, x_off, y_off = self.abs_xy(x, y)
+        self.term.move(abs_x, abs_y)
+
     def writeln(self, y, text, *args, **kwargs):
         self.vwriteln(y, text, args, kwargs,
                       hfill=kwargs.get('hfill', True))
@@ -420,21 +424,46 @@ class Region:
         self.vwrite_xy(x, y, text, args, kwargs,
                        hfill=kwargs.get('hfill', True))
 
-    def vwrite_xy(self, x, y, text, args, kwargs, hfill=True):
+    def adjust_xy(self, x, y):
+        y_off = 0
         if y >= self.height:
-            return
+            y_off = y - (self.height - 1)
+            y = self.height - 1
         elif y < 0:
             y = self.height - y
             if y < 0:
-                return
+                y_off = y
+                y = 0
 
+        x_off = 0
         if x >= self.width:
-            # Out of the region
-            return
+            x_off = x - (self.width - 1)
+            x = self.width - 1
         elif x < 0:
             x = self.width - x
             if x < 0:
-                return
+                x_off = x
+                x = 0
+
+        return x, y, x_off, y_off
+
+    def abs_xy(self, x, y):
+        x, y, x_off, y_off = self.adjust_xy(x, y)
+        return self.x + x, self.y + y, x_off, y_off
+
+    def vwrite_xy(self, x, y, text, args, kwargs, hfill=True):
+        x, y, x_off, y_off = self.adjust_xy(x, y)
+        if y_off != 0:
+            # The text is above or below the region
+            return
+        if x_off > 0:
+            # The text is past the right edge of the region
+            return
+        if x_off < 0:
+            # The text starts to the left of the region
+            # TODO: We probably should render the text in case part of it
+            # would fall into the region.
+            return
 
         width = self.width - x
         data = self.term.vformat(text, args, kwargs, width=width, hfill=hfill)
