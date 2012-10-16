@@ -8,12 +8,19 @@ import email.generator
 import email.header
 import email.message
 import email.parser
+import email.policy
 import email.utils
 import hashlib
 import io
 import os
 import re
 import time
+
+
+# Use the new EmailPolicy rather than the python 3.2 compatible version
+class EmailPolicy(email.policy.EmailPolicy):
+    def __init__(self):
+        super().__init__(refold_source='none')
 
 
 class Message:
@@ -33,9 +40,15 @@ class Message:
     FLAG_DELETED = 'T'  # Trash
     FLAG_DRAFT = 'D'
 
-    def __init__(self, msg, timestamp, flags, custom_flags):
+    DEFAULT_POLICY = EmailPolicy()
+
+    def __init__(self, msg, timestamp, flags, custom_flags, policy=None):
         # An email.message.Message object
         self.msg = msg
+
+        if policy is None:
+            policy = self.DEFAULT_POLICY
+        self.policy = policy
 
         if isinstance(timestamp, datetime.datetime):
             self.datetime = timestamp
@@ -53,39 +66,48 @@ class Message:
         self.custom_flags = custom_flags
 
         # Parse commonly used fields
-        # These should be accessed with the @property methods below,
-        # since we currently don't support updating self.msg when they are
-        # changed.
-        self._to = AddressList()
-        self._cc = AddressList()
-        self._from_addr = AddressList()
-        self._subject_hdr = None
-        self._subject = None
-        for k, v in self.msg._headers:
-            if k.lower() == 'to':
-                self._to.extend(self._parse_addresses(k, v))
-            elif k.lower() == 'cc':
-                self._cc.extend(self._parse_addresses(k, v))
-            elif k.lower() == 'from':
-                self._from_addr.extend(self._parse_addresses(k, v))
-            elif self._subject is None and k.lower() == 'subject':
-                self._subject_hdr = self._decode_header(k, v)
-                self._subject = str(self._subject_hdr)
+        self._cache_common_headers()
 
         # The body will be parsed lazily if needed
         self._body_text = None
 
+    def _cache_common_headers(self):
+        # Parse commonly used headers, and cache their values
+        # These should be accessed with the @property methods below,
+        # since we currently don't support updating self.msg when they are
+        # updated.
+        cached_headers = {
+            '_to': 'to',
+            '_cc': 'cc',
+            '_from_addr': 'from',
+            '_subject': 'subject',
+        }
+        for attr in cached_headers:
+            setattr(self, attr, None)
+        for k, v in self.msg._headers:
+            for attr, hdr_name in cached_headers.items():
+                if k.lower() == hdr_name:
+                    if getattr(self, attr) is None:
+                        parsed = self.policy.header_fetch_parse(k, v)
+                        setattr(self, attr, parsed)
+                    break
+
+        for attr, hdr_name in cached_headers.items():
+            if getattr(self, attr) is None:
+                empty = self.policy.header_fetch_parse(hdr_name, '')
+                setattr(self, attr, empty)
+
     @property
     def to(self):
-        return self._to
+        return self._to.addresses
 
     @property
     def cc(self):
-        return self._cc
+        return self._cc.addresses
 
     @property
     def from_addr(self):
-        return self._from_addr
+        return self._from_addr.addresses
 
     @property
     def subject(self):
@@ -94,7 +116,7 @@ class Message:
     @classmethod
     def from_maildir(cls, path):
         # Parse the message itself
-        parser = email.parser.BytesParser()
+        parser = cls.msg_parser()
         with open(path, 'rb') as f:
             s = os.fstat(f.fileno())
             timestamp = s.st_mtime
@@ -143,13 +165,19 @@ class Message:
         else:
             assert isinstance(flags, set)
 
-        parser = email.parser.BytesParser()
+        parser = cls.msg_parser()
         msg = parser.parsebytes(data)
         return cls(msg, timestamp, flags, custom_flags)
 
+    @classmethod
+    def msg_parser(cls):
+        # Use the new EmailPolicy rather than the python 3.2 compatible version
+        policy = email.policy.EmailPolicy()
+        return email.parser.BytesParser(policy=policy)
+
     def to_bytes(self):
         out_bytes = io.BytesIO()
-        gen = email.generator.BytesGenerator(out_bytes)
+        gen = email.generator.BytesGenerator(out_bytes, policy=self.policy)
         gen.flatten(self.msg)
         return out_bytes.getvalue()
 
@@ -192,11 +220,7 @@ class Message:
         Returns an email.header.Header, or the specified default if no header
         exists with this name.
         '''
-        name = name.lower()
-        for k, v in self.msg._headers:
-            if k.lower() == name:
-                return self._decode_header(k, v)
-        return default
+        return self.msg.get(name, default)
 
     def get(self, name, default=None):
         '''
@@ -208,10 +232,7 @@ class Message:
         Returns a string, or the specified default if no header exists with
         this name.
         '''
-        hdr = self.get_header(name)
-        if hdr is None:
-            return default
-        return str(hdr)
+        return self.get_header(name)
 
     def get_header_all(self, name, default=None):
         '''
@@ -224,7 +245,8 @@ class Message:
         name = name.lower()
         for k, v in self.msg._headers:
             if k.lower() == name:
-                results.append(self._decode_header(k, v))
+                value = self.policy.header_fetch_parse(k, v)
+                results.append(value)
 
         if not results:
             return default
@@ -260,23 +282,7 @@ class Message:
         del self.msg[name]
 
     def add_header(self, name, value):
-        self.msg[name] = self._decode_header(name, value)
-
-    def _decode_header(self, name, value, errors='replace'):
-        # TODO: Newer versions of python support a 'policy' argument to the
-        # email.message.Message constructor, which we could use instead of
-        # having to manually invoke _decode_header() in our own wrapper
-        # functions.
-
-        if hasattr(value, '_chunks'):
-            # Looks like it is already an email.header.Header object
-            return value
-
-        hdr = email.header.Header(header_name=name)
-        parts = email.header.decode_header(value)
-        for part, charset in parts:
-            hdr.append(part, charset, errors=errors)
-        return hdr
+        self.msg[name] = value
 
     def get_message_id(self):
         '''
@@ -343,11 +349,11 @@ class Message:
         h = hashlib.md5()
 
         # Hash the Subject, From, and Message-ID headers
-        for header in (self._subject_hdr, self.get_header('From'),
+        for header in (self._subject, self.get_header('From'),
                        self.get_header('Message-ID')):
             if header is None:
                 continue
-            encoded = header.encode()[:40].encode('utf-8', 'surrogateescape')
+            encoded = header[:40].encode('utf-8', 'surrogateescape')
             h.update(encoded)
 
         # Hash the first 40 bytes of the first body part
@@ -365,10 +371,6 @@ class Message:
 
     def fingerprint(self):
         return base64.b64encode(self.binary_fingerprint())
-
-    def _parse_addresses(self, hdr_name, raw_value):
-        header = self._decode_header(hdr_name, raw_value)
-        return email.utils.getaddresses([str(header)])
 
     def _compute_body_text(self):
         return '\n'.join(decode_payload(msg) for msg in self.iter_body_msgs())

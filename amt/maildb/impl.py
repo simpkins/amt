@@ -510,8 +510,8 @@ class MailDB(interface.MailDB):
         assert isinstance(tuid, TUID)
 
         if msg.from_addr:
-            from_name = msg.from_addr[0][0]
-            from_addr = msg.from_addr[0][1]
+            from_name = msg.from_addr[0].display_name
+            from_addr = msg.from_addr[0].addr_spec
         else:
             from_name = ''
             from_addr = ''
