@@ -61,7 +61,7 @@ class Maildir:
 
     def _check_subdirs(self):
         for subdir in ('cur', 'new', 'tmp'):
-            full_subdir = os.path.join(self, self.path, subdir)
+            full_subdir = os.path.join(self.path, subdir)
             try:
                 s = os.lstat(full_subdir)
             except OSError as ex:
