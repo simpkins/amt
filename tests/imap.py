@@ -15,7 +15,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt import imap
 
-from tests.lib.imap_server import ImapServer
+from tests.lib import imap_server
 from tests.lib.util import *
 
 
@@ -222,11 +222,10 @@ class TestSuite:
             print('*** FAILED ***')
 
 
-class Tests(unittest.TestCase):
+class Tests(imap_server.ImapTests):
     def test(self):
-        with ImapServer() as server:
-            ts = TestSuite(server.get_account())
-            ts.run()
+        ts = TestSuite(cls.server.get_account())
+        ts.run()
 
 
 def main():

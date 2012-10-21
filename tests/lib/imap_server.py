@@ -2,6 +2,7 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import errno
 import logging
 import os
 import pwd
@@ -9,9 +10,14 @@ import socket
 import subprocess
 import tempfile
 import time
+import unittest
 
 from amt import imap
 from .util import random_string
+
+
+class NoImapServerError(Exception):
+    pass
 
 
 class ImapServer:
@@ -36,7 +42,13 @@ class ImapServer:
 
         logging.debug('starting dovecot in %s', self.tmpdir.name)
         cmd = ['dovecot', '-F', '-c', config_path]
-        self.process = subprocess.Popen(cmd, cwd=self.tmpdir.name)
+
+        try:
+            self.process = subprocess.Popen(cmd, cwd=self.tmpdir.name)
+        except OSError as ex:
+            if ex.errno == errno.ENOENT:
+                raise NoImapServerError('dovecot not installed')
+            raise
 
         # Wait until dovecot is started and accepting connections
         self._wait_until_started()
@@ -120,3 +132,28 @@ class ImapServer:
             logging.debug('leaving dovecot directory %s', self.tmpdir.name)
             self.tmpdir.name = None
         self.tmpdir = None
+
+
+class ImapTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.server = ImapServer()
+            cls.server.start()
+        except NoImapServerError as ex:
+            # Just set cls.no_server_msg for now,
+            # and let setUp() skip each individual test.  This makes the
+            # test reporting nicer than if we just raised SkipTest here.
+            cls.server = None
+            cls.no_server_msg = str(ex)
+
+    def setUp(self):
+        if self.server is None:
+            raise unittest.SkipTest(self.no_server_msg)
+        super().setUp()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.server is not None:
+            cls.server.stop()
+            cls.server = None

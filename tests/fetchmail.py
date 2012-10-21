@@ -3,12 +3,11 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 import itertools
-import unittest
 
 from amt import fetchmail
 from amt import imap
 
-from tests.lib.imap_server import ImapServer
+from tests.lib import imap_server
 from tests.lib.util import *
 
 
@@ -22,18 +21,7 @@ class RecordProcessor(fetchmail.Processor):
         return True
 
 
-class Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server = ImapServer()
-        cls.server.start()
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.server is not None:
-            cls.server.stop()
-            cls.server = None
-
+class Tests(imap_server.ImapTests):
     def get_conn(self):
         return imap.login(self.server.get_account())
 
