@@ -42,25 +42,68 @@ class Config:
         return self._default_account
 
 
-class Account:
-    def __init__(self, server, user,
-                 protocol=None, port=None,
-                 password_fn=None, password=None):
-        self.server = server
-        self.user = user
+class ProtocolInfo:
+    def __init__(self, protocol, port, ssl):
         self.protocol = protocol
         self.port = port
+        self.ssl = ssl
+
+    def resolve(self, supported_protocols):
+        if self.protocol is None and self.port is None:
+            raise Exception('no protocol and no port specified')
+        if self.protocol is not None:
+            for entry in supported_protocols:
+                if self.protocol == entry.protocol:
+                    break
+            else:
+                raise Exception('unsupported protocol %r' % (self.protocol,))
+        else:
+            for entry in supported_protocols:
+                if self.port == entry.port:
+                    break
+            else:
+                raise Exception('no protocol specified, and unknown port %r' %
+                                (self.port,))
+
+        if self.protocol is None:
+            self.protocol = self.protocol or entry.protocol
+        if self.port is None:
+            self.port = entry.port
+        if self.ssl is None:
+            self.ssl = entry.ssl
+
+
+class Account:
+    SUPPORTED_PROTOCOLS = [
+        ProtocolInfo('imaps', IMAPS_PORT, ssl=True),
+        ProtocolInfo('imap', IMAP_PORT, ssl=False),
+    ]
+
+    def __init__(self, server, user,
+                 protocol=None, port=None,
+                 password_fn=None, password=None, ssl=None):
+        self.server = server
+
+        self._protocol = ProtocolInfo(protocol, port, ssl)
+        self._protocol.resolve(self.SUPPORTED_PROTOCOLS)
+
+        self.user = user
         self._password = password
         self._password_fn = password_fn
-
-        if self.port is None:
-            if self.protocol.lower() == 'imaps':
-                self.port = IMAPS_PORT
-            elif self.protocol.lower() == 'imap':
-                self.port = IMAP_PORT
-
         if self._password_fn is None:
             self._password_fn = get_password_keyring
+
+    @property
+    def protocol(self):
+        return self._protocol.protocol
+
+    @property
+    def port(self):
+        return self._protocol.port
+
+    @property
+    def ssl(self):
+        return self._protocol.ssl
 
     @property
     def password(self):
