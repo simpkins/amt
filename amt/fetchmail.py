@@ -7,6 +7,7 @@ import logging
 from . import imap
 from .getpassword import get_password
 from .message import Message
+from .maildir import Maildir
 
 '''
 The fetchmail code is divided into 2 main pieces:
@@ -19,17 +20,25 @@ The fetchmail code is divided into 2 main pieces:
       - handles delivery to local mailboxes
 '''
 
+_log = logging.getLogger('amt.fetchmail')
+
+
 class NoMoreMessagesError(Exception):
     def __init__(self):
         super(NoMoreMessagesError, self).__init__(self, 'no more messages')
 
 
 class ProcessorError(Exception):
-    def __init__(self, msg, ret):
-        err_msg = 'processor failed while processing message'
-        super(ProcessorError, self).__init__(self, err_msg)
+    def __init__(self, msg, ret=None):
+        super(ProcessorError, self).__init__(self)
         self.msg = msg
         self.ret = ret
+
+    def __str__(self):
+        err_msg = 'processor failed while processing message'
+        if self.ret is not None:
+            err_msg += ': returned %r rather than True' % (self.ret,)
+        return err_msg
 
 
 class Processor:
@@ -46,6 +55,18 @@ class Processor:
         '''
         raise NotImplementedError('process_msg() must be implemented by '
                                   'Processor subclasses')
+
+
+class MaildirProcessor(Processor):
+    def __init__(self, mailbox):
+        if isinstance(mailbox, Maildir):
+            self.mailbox = mailbox
+        else:
+            self.mailbox = Maildir(mailbox, create=True)
+
+    def process_msg(self, msg):
+        self.mailbox.add(msg)
+        return True
 
 
 class Scanner:
@@ -87,6 +108,9 @@ class Scanner:
 
 
 class SeqIDScanner(Scanner):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     def _post_open(self):
         self.current_msg = None
         self.next_msg = 1
@@ -125,12 +149,18 @@ class SeqIDScanner(Scanner):
 
         while True:
             self._run_once()
+            _log.debug('waiting for new messages...')
             self.conn.wait_for_exists()
 
     def process_next_msg(self):
         assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
         if self.next_msg > self.conn.mailbox.num_messages:
+            _log.debug('finished processing %d available messages',
+                       self.conn.mailbox.num_messages)
             raise NoMoreMessagesError()
+
+        _log.debug('processing message %d of %d',
+                   self.next_msg, self.conn.mailbox.num_messages)
 
         self.current_msg = self.next_msg
         msg = self.conn.fetch_msg(self.current_msg)
@@ -144,14 +174,15 @@ class SeqIDScanner(Scanner):
         self.current_msg = None
 
     def invoke_processor(self, msg):
+        # TODO: implement some sort of retry functionality on error
         try:
             ret = self.processor.process_msg(msg)
-            if ret != True:
-                raise ProcessorError(msg, ret)
-        except:
-            # FIXME: implement some sort of retry functionality
+        except Exception as ex:
             self.msg_failed()
-            raise
+            raise ProcessorError(msg) from ex
+        if ret != True:
+            self.msg_failed()
+            raise ProcessorError(msg, ret)
 
         self.msg_successful()
 
