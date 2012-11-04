@@ -8,6 +8,7 @@ import logging
 import random
 import select
 import socket
+import ssl
 import time
 
 from .. import ssl_util
@@ -95,7 +96,7 @@ class ConnectionCore:
     Supports sending requests, receiving responses, and managing handlers for
     untagged responses.
     '''
-    def __init__(self, server, port=None, timeout=60, ssl=True):
+    def __init__(self, server, port=None, timeout=60):
         self._responses = []
         self._parser = ResponseStream(self._on_response)
         self.default_response_timeout = timeout
@@ -111,16 +112,16 @@ class ConnectionCore:
         # _response_code_handlers is indexed by the response code token
         self._response_code_handlers = HandlerDict()
 
-    def _connect_sock(self, server, port, timeout, ssl):
+    def _connect_sock(self, server, port, timeout, use_ssl):
         if port is None:
-            if ssl:
+            if use_ssl:
                 port = IMAPS_PORT
             else:
                 port = IMAP_PORT
 
         self.raw_sock = socket.create_connection((server, port),
                                                  timeout=timeout)
-        if ssl:
+        if use_ssl:
             ctx = ssl_util.new_ctx()
             self.sock = ctx.wrap_socket(self.raw_sock)
         else:
@@ -240,6 +241,8 @@ class ConnectionCore:
             self._wait_for_recv_ready(end_time)
             try:
                 data = self.sock.recv(4096)
+            except ssl.SSLWantReadError as ex:
+                continue
             except socket.error as ex:
                 if ex.errno == errno.EAGAIN:
                     continue

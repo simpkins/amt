@@ -153,7 +153,7 @@ class MailboxInfo:
 
 class Connection(ConnectionCore):
     def __init__(self, server, port=None, timeout=60, ssl=True):
-        super().__init__(server=server, port=port, timeout=timeout, ssl=ssl)
+        super().__init__(server=server, port=port, timeout=timeout)
 
         self._server_capabilities = None
         self.mailbox = None
@@ -164,8 +164,8 @@ class Connection(ConnectionCore):
 
         self._connect(server, port, timeout, ssl)
 
-    def _connect(self, server, port, timeout, ssl):
-        self._connect_sock(server, port, timeout, ssl)
+    def _connect(self, server, port, timeout, use_ssl):
+        self._connect_sock(server, port, timeout=timeout, use_ssl=use_ssl)
 
         # Receive the server greeting
         resp = self.get_response()
