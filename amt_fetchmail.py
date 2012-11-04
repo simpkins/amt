@@ -25,10 +25,14 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO)
 
+    # TODO: Put a more generic mechanism in place for showing diagnostic output
+    amt.fetchmail._log.setLevel(logging.DEBUG)
+
     config = amt.config.load_config(args.config_path)
-    fetchmail_config = config.FetchmailConfig()
-    processor = amt.fetchmail.SimpleProcessor(fetchmail_config)
-    processor.run()
+    account.prepare_password()
+
+    scanner = config.config_dict['fetchmail_scanner']
+    scanner.run_forever()
 
 
 if __name__ == '__main__':

@@ -27,6 +27,8 @@ def load_config(path):
 
 class Config:
     def __init__(self, config):
+        self.config_dict = config
+
         self.accounts = config['accounts']
         if 'default_account' in config:
             self._default_account = self.accounts[config['default_account']]
