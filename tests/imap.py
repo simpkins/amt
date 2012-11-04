@@ -224,7 +224,7 @@ class TestSuite:
 
 class Tests(imap_server.ImapTests):
     def test(self):
-        ts = TestSuite(cls.server.get_account())
+        ts = TestSuite(self.server.get_account())
         ts.run()
 
 
