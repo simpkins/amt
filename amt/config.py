@@ -2,21 +2,44 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import getpass
 import imp
 import os
 import pwd
 
 from . import getpassword
+from .imap.constants import IMAP_PORT, IMAPS_PORT
+from . import fetchmail
 
 
 def load_config(path):
-    # Import the configuration from the specified path
-    # Always import it using the 'amt_config' module name, so that it
-    # won't conflict with any system modules or any of our own module names.
-    dirname, basename = os.path.split(path)
-    info = imp.find_module(basename, [dirname])
-    config = imp.load_module('amt_config', *info)
-    return config
+    params = {
+        'Account': Account,
+        'fetchmail': fetchmail,
+    }
+
+    with open(path, 'r') as f:
+        data = f.read()
+        exec(data, params, params)
+
+    return Config(params)
+
+
+class Config:
+    def __init__(self, config):
+        self.accounts = config['accounts']
+        if 'default_account' in config:
+            self._default_account = self.accounts[config['default_account']]
+        elif len(self.accounts) == 1:
+            self._default_account = next(iter(self.accounts.values()))
+        else:
+            self._default_account = None
+
+    @property
+    def default_account(self):
+        if self._default_account is None:
+            raise Exception('no default account')
+        return self._default_account
 
 
 class Account:
@@ -29,6 +52,12 @@ class Account:
         self.port = port
         self._password = password
         self._password_fn = password_fn
+
+        if self.port is None:
+            if self.protocol.lower() == 'imaps':
+                self.port = IMAPS_PORT
+            elif self.protocol.lower() == 'imap':
+                self.port = IMAP_PORT
 
         if self._password_fn is None:
             self._password_fn = get_password_keyring
@@ -56,6 +85,16 @@ def get_password_keyring(account=None, server=None, user=None,
         port = account.port
     return getpassword.get_password(user=user, server=server,
                                     port=port, protocol=protocol)
+
+
+def get_password_input(account=None, server=None, user=None,
+                       protocol=None, port=None):
+    if user is None:
+        user = account.user
+    if server is None:
+        server = account.server
+    prompt = 'Password for %s@%s: ' % (user, server)
+    return getpass.getpass(prompt)
 
 
 def get_home_dir():

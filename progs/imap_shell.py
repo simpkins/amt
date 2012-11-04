@@ -14,6 +14,7 @@ import sys
 import traceback
 
 sys.path.insert(0, os.path.dirname(sys.path[0]))
+import amt.config
 from amt import imap
 
 
@@ -74,16 +75,24 @@ def cmd_fn(fn):
 
 
 class ImapShell(cmd.Cmd):
-    def __init__(self, args):
+    def __init__(self, account):
         super(ImapShell, self).__init__()
-        self.args = args
+        self.account = account
 
     def run(self):
-        print('Connecting to %s:%d' % (self.args.server, self.args.port))
-        self.conn = imap.Connection(self.args.server, self.args.port,
-                                    ssl=self.args.ssl)
-        print('Logging in as %s' % (self.args.user,))
-        self.conn.login(self.args.user, self.args.password)
+        if self.account.protocol == 'imap':
+            ssl = False
+        elif self.account.protocol == 'imaps':
+            ssl = True
+        else:
+            raise Exception('unsupported account protocol: %r' %
+                            (self.account.protocol,))
+
+        print('Connecting to %s:%d' % (self.account.server, self.account.port))
+        self.conn = imap.Connection(self.account.server, self.account.port,
+                                    ssl=ssl)
+        print('Logging in as %s' % (self.account.user,))
+        self.conn.login(self.account.user, self.account.password)
         print('Logged in.')
         caps = (cap.decode('utf-8', errors='replace') for cap in
                 self.conn.get_capabilities())
@@ -93,7 +102,7 @@ class ImapShell(cmd.Cmd):
         self.cmdloop()
 
     def update_prompt(self):
-        prompt = self.args.server
+        prompt = self.account.server
         if self.conn.mailbox is not None:
             prompt += ':' + self.conn.mailbox.name
             if self.conn.mailbox.state == imap.STATE_READ_ONLY:
@@ -252,25 +261,45 @@ class ImapShell(cmd.Cmd):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-s', '--server', required=True,
-                    help='The server to connect to for testing')
-    ap.add_argument('-p', '--port', required=True,
-                    type=int,
-                    help='The server port')
+
+    config_group = ap.add_mutually_exclusive_group(required=True)
+    config_group.add_argument('-c', '--config',
+                              help='The AMT configuration file')
+    config_group.add_argument('-s', '--server',
+                              help='The server to connect to for testing')
+
+    ap.add_argument('-u', '--user',
+                    help='The username for connecting to the server')
     ap.add_argument('-S', '--no-ssl',
                     action='store_false', default=True,
                     dest='ssl', help='Do not use SSL')
-    ap.add_argument('-u', '--user', required=True,
-                    help='The username for connecting to the server')
-    ap.add_argument('-P', '--password', required=True,
+    ap.add_argument('-P', '--password',
                     help='The password for connecting to the server')
+
     ap.add_argument('--clean', action='store_true', default=False,
                     help='Clean test mailboxes from the server')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
 
-    shell = ImapShell(args)
+    if args.config:
+        config = amt.config.load_config(args.config)
+        account = config.default_account
+    else:
+        if args.user is None:
+            ap.error('--user must be specified when not using a config file')
+        if args.ssl:
+            protocol = 'imaps'
+        else:
+            protocol = 'imap'
+        account = amt.config.Account(server=args.server,
+                                     user=args.user, protocol=protocol,
+                                     password=args.password,
+                                     password_fn=amt.config.get_password_input)
+
+    account.prepare_password()
+
+    shell = ImapShell(account)
     shell.run()
 
 
