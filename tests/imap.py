@@ -4,6 +4,7 @@
 #
 import argparse
 import datetime
+import functools
 import logging
 import os
 import queue
@@ -22,42 +23,44 @@ from tests.lib.util import *
 MAILBOX_PREFIX = 'amt_test'
 
 
-class Test:
-    def __init__(self, name, suite):
-        self.name = name
-        self.suite = suite
+class TmpMbox:
+    def __init__(self, conn, prefix):
+        self.conn = conn
+        self.name = self._create_mbox(prefix)
+        self.delete_on_exit = True
 
     def __enter__(self):
-        self.suite.test_started(self.name)
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        if exc_type is None:
-            self.suite.test_success(self.name)
+        try:
+            if self.delete_on_exit:
+                self.delete()
+        except Exception as ex:
+            logging.warning('unable to delete temporary mailbox %s: %s',
+                            self.name, ex)
+
+    def delete(self):
+        self.conn.delete_mailbox(self.name)
+        self.delete_on_exit = False
+
+    def _create_mbox(self, prefix):
+        # Get the mailbox delimiter
+        delim = self.conn.get_mailbox_delim()
+
+        for num_tries in range(5):
+            mbox_name = self.rand_mbox_name(prefix, delim)
+            responses = self.conn.list_mailboxes('', mbox_name)
+            if not responses:
+                break
         else:
-            self.suite.test_failure(self.name, exc_type, exc_value, exc_tb)
+            raise Exception('failed to pick unique mailbox name '
+                            'after 5 tries')
 
+        self.conn.create_mailbox(mbox_name)
+        return mbox_name
 
-class TestSuite:
-    def __init__(self, account):
-        self.account = account
-        self.num_success = 0
-        self.num_failure = 0
-
-        self.examine_thread = None
-        self._stop = threading.Event()
-        self.examine_events = queue.Queue()
-
-    def clean(self):
-        self.conn = imap.login(self.account)
-
-        responses = self.conn.list_mailboxes(MAILBOX_PREFIX, '*')
-        for response in responses:
-            mbox_name = response.mailbox.decode('ASCII', errors='strict')
-            print('Deleting mailbox "%s"' % mbox_name)
-            self.conn.delete_mailbox(response.mailbox)
-
-    def rand_mbox_name(self, length=8):
+    def rand_mbox_name(self, prefix, delim, length=8):
         choices = []
         choices.extend(chr(n) for n in range(ord('a'), ord('z') + 1))
         choices.extend(chr(n) for n in range(ord('A'), ord('Z') + 1))
@@ -67,165 +70,319 @@ class TestSuite:
         for n in range(length):
             idx = random.randrange(0, len(choices))
             rand_chars.append(choices[idx])
-        return ''.join(rand_chars)
+        suffix = ''.join(rand_chars)
+        return '%s%s%s' % (MAILBOX_PREFIX, delim, suffix)
 
-    def run(self):
-        with self.test('login'):
-            self.conn = imap.login(self.account)
 
-        with self.test('create_mailbox'):
-            # Get the mailbox delimiter
-            responses = self.conn.list_mailboxes('', '')
-            delim = responses[0].delimiter.decode('ASCII', errors='strict')
+class MboxExaminer:
+    def __init__(self, account, mbox):
+        self.account = account
+        self.mbox = mbox
+        self.events = queue.Queue()
+        self._stop = threading.Event()
+        self.thread = None
+        self.conn = None
 
-            for num_tries in range(5):
-                suffix = self.rand_mbox_name()
-                self.mbox_name = '%s%s%s' % (MAILBOX_PREFIX, delim, suffix)
-                responses = self.conn.list_mailboxes('', self.mbox_name)
-                if not responses:
-                    break
-            else:
-                raise Exception('failed to pick unique mailbox name '
-                                'after 5 tries')
+    def __enter__(self):
+        self.start()
+        return self
 
-            self.conn.create_mailbox(self.mbox_name)
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        self.stop()
 
-        self._start_examine_thread()
-        try:
-            self.run_tests()
-        finally:
-            self._stop_examine_thread()
-            with self.test('delete_mailbox'):
-                self.conn.delete_mailbox(self.mbox_name)
-            self.print_results()
+    def start(self):
+        self.thread = threading.Thread(target=self._thread_main)
+        self.thread.start()
+        # Wait for the examine thread to start and select the mailbox
+        event = self._get_event()
+        assert event is None
 
-    def run_tests(self):
-        with self.test('select'):
-            self.conn.select_mailbox(self.mbox_name)
-
-        with self.test('append'):
-            msg = random_message()
-            self.conn.append_msg(self.mbox_name, msg)
-
-            # The expect thread should see the new message
-            response = self.expect_examine_event(b'EXISTS')
-            self.assert_equal(response.number, 1)
-
-        with self.test('search'):
-            msg_nums = self.conn.search(b'ALL')
-            self.assert_equal(msg_nums, [1])
-
-        with self.test('fetch'):
-            # Fetch the message, and make sure the contents are identical
-            fetched_msg = self.conn.fetch_msg(1)
-
-            self.assert_equal(fetched_msg.to, msg.to)
-            self.assert_equal(fetched_msg.cc, msg.cc)
-            self.assert_equal(fetched_msg.from_addr, msg.from_addr)
-            self.assert_equal(fetched_msg.subject, msg.subject)
-            self.assert_equal(int(fetched_msg.timestamp), int(msg.timestamp))
-            delta = fetched_msg.datetime - msg.datetime
-            self.assert_le(abs(delta), datetime.timedelta(seconds=1))
-            self.assert_equal(fetched_msg.flags, msg.flags)
-            self.assert_equal(fetched_msg.custom_flags, set([b'\\Recent']))
-            self.assert_equal(fetched_msg.body_text, msg.body_text)
-            self.assert_equal(fetched_msg.fingerprint(), msg.fingerprint())
-
-        with self.test('delete'):
-            msg_nums = self.conn.delete_msg(1, expunge_now=True)
-            # The expect thread should see the expunge event
-            response = self.expect_examine_event(b'EXPUNGE')
-            self.assert_equal(response.number, 1)
-
-    def assert_equal(self, value, expected):
-        if value == expected:
+    def stop(self):
+        if self.thread is None:
             return
-        raise AssertionError('assertion failed: %r != %r' % (value, expected))
 
-    def assert_le(self, value, expected):
-        if value <= expected:
-            return
-        raise AssertionError('assertion failed: %r > %r' % (value, expected))
+        # Set self._stop() and wake up the other thread if it is idling
+        self._stop.set()
+        if self.conn is not None:
+            self.conn.stop_idle_threadsafe()
 
-    def examine_thread_main(self):
-        conn2 = imap.login(self.account)
-        conn2.select_mailbox(self.mbox_name, readonly=True)
+        self.thread.join()
+        self.thread = None
 
-        def response_handler(response):
-            if self._stop.is_set():
-                conn2.stop_idle()
-            self.examine_events.put(response)
-
-        self.examine_events.put(None)
-        with conn2.untagged_handler(None, response_handler):
-            while not self._stop.is_set():
-                conn2.idle()
-
-        conn2.close()
-        self.examine_events.put(None)
-
-    def expect_examine_event(self, resp_type, timeout=5):
+    def expect_event(self, resp_type, number=None, timeout=5):
         found = []
         try:
             while True:
-                response = self.examine_events.get(timeout=timeout)
+                response = self._get_event()
                 if response.resp_type == resp_type:
+                    if number is not None and number != response.number:
+                        raise AssertionError('expected %s response with '
+                                             'number %d, got %d' %
+                                             (resp_type, number,
+                                                 response.number))
                     return response
-                found.append(response)
+                found.append(str(response))
         except queue.Empty:
             pass
         raise AssertionError('expected examine thread to see a %s '
                              'response; found %s instead' %
                              (resp_type, found))
 
-    def _start_examine_thread(self):
-        self.examine_thread = threading.Thread(target=self.examine_thread_main)
-        self.examine_thread.start()
-        # Wait for the examine thread to start and select the mailbox
-        event = self.examine_events.get(timeout=3)
-        assert event is None
+    def _get_event(self):
+        event = self.events.get(timeout=3)
+        if isinstance(event, Exception):
+            raise event
+        return event
 
-    def _stop_examine_thread(self):
-        if self.examine_thread is None:
-            return
+    def _thread_main(self):
+        try:
+            with imap.login(self.account) as self.conn:
+                self.conn.select_mailbox(self.mbox, readonly=True)
 
-        self._stop.set()
+                # Add an event to let the the main thread know we have started
+                # successfully.
+                self.events.put(None)
 
-        # Add a new message to wake up the examine thread
-        msg = random_message()
-        self.conn.append_msg(self.mbox_name, msg)
+                self._main_loop()
+        except Exception as ex:
+            self.events.put(ex)
+        self.conn = None
 
-        self.examine_thread.join()
-        self.examine_thread = None
+    def _main_loop(self):
+        def response_handler(response):
+            if self._stop.is_set():
+                self.conn.stop_idle()
+            self.events.put(response)
 
-    def test(self, name):
-        return Test(name, self)
+        with self.conn.untagged_handler(None, response_handler):
+            while not self._stop.is_set():
+                self.conn.idle()
 
-    def test_started(self, name):
-        pass
 
-    def test_success(self, name):
-        self.num_success += 1
-        print('%s... success' % (name,))
+def conn_test(fn):
+    @functools.wraps(fn)
+    def test_wrapper(self):
+        with imap.login(self.account) as conn:
+                fn(self, conn)
+    return test_wrapper
 
-    def test_failure(self, name, exc_type, exc_value, exc_tb):
-        self.num_failure += 1
-        print('%s... failure' % (name,))
 
-    def print_results(self):
-        total = self.num_success + self.num_failure
-        print('-' * 60)
-        print('Passed %d/%d tests' % (self.num_success, total))
-        if self.num_success == total:
-            print('Success!')
-        else:
-            print('*** FAILED ***')
+def mbox_test(fn):
+    @functools.wraps(fn)
+    def test_wrapper(self):
+        with imap.login(self.account) as conn:
+            with self.tmp_mbox(conn) as mbox:
+                conn.select_mailbox(mbox.name)
+                fn(self, conn, mbox.name)
+    return test_wrapper
+
+
+def examine_mbox_test(fn):
+    @functools.wraps(fn)
+    def test_wrapper(self):
+        with imap.login(self.account) as conn:
+            with self.tmp_mbox(conn) as mbox:
+                with self.examiner(mbox) as examiner:
+                    conn.select_mailbox(mbox.name)
+                    fn(self, conn, mbox.name, examiner)
+    return test_wrapper
 
 
 class Tests(imap_server.ImapTests):
-    def test(self):
-        ts = TestSuite(self.server.get_account())
-        ts.run()
+    @classmethod
+    def set_account(cls):
+        cls.account = account
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = None
+        if hasattr(cls, 'account') and cls.account is not None:
+            return
+
+        try:
+            cls.server = imap_server.ImapServer()
+            cls.server.start()
+            cls.account = cls.server.get_account()
+        except imap_server.NoImapServerError as ex:
+            # Just set cls.no_server_msg for now,
+            # and let setUp() skip each individual test.  This makes the
+            # test reporting nicer than if we just raised SkipTest here.
+            cls.server = None
+            cls.no_server_msg = str(ex)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.account is not None:
+            cls.clean_tmp_mailboxes(cls.account)
+        if cls.server is not None:
+            cls.server.stop()
+            cls.server = None
+            cls.account = None
+
+    def setUp(self):
+        if self.account is None:
+            raise unittest.SkipTest(self.no_server_msg)
+        super().setUp()
+
+    def test_login(self):
+        conn = imap.login(self.account)
+        conn.close()
+
+    @conn_test
+    def test_create_mailbox(self, conn):
+        mbox = self.tmp_mbox(conn)
+        mbox.delete()
+
+    @examine_mbox_test
+    def test_append(self, conn, mbox, examiner):
+        msg = random_message()
+        conn.append_msg(mbox, msg)
+
+        # The expect thread should see the new message
+        response = examiner.expect_event(b'EXISTS', 1)
+
+    @mbox_test
+    def test_search(self, conn, mbox):
+        msgs = [
+            random_message(from_addr=('Alice', 'user1@example.com')),
+            random_message(from_addr=('Bob', 'user2@example.com')),
+            random_message(from_addr=('Carl', 'user3@example.com')),
+            random_message(from_addr=('Alice', 'user1@example.com')),
+            random_message(from_addr=('Dave', 'user4@example.com')),
+        ]
+        for msg in msgs:
+            conn.append_msg(mbox, msg)
+
+        # Test searching for all messages
+        msg_nums = conn.search(b'ALL')
+        expected_nums = list(range(1, len(msgs) + 1))
+        self.assert_equal(msg_nums, expected_nums)
+
+        # Search for messages from user2
+        msg_nums = conn.search(b'FROM user2')
+        expected_nums = [2]
+        self.assert_equal(msg_nums, expected_nums)
+
+        # Search for messages from user1
+        msg_nums = conn.search(b'FROM Alice')
+        expected_nums = [1, 4]
+        self.assert_equal(msg_nums, expected_nums)
+
+    @mbox_test
+    def test_fetch(self, conn, mbox):
+        # Add a message
+        msg = random_message()
+        conn.append_msg(mbox, msg)
+
+        # Fetch the message, and make sure the contents are identical
+        fetched_msg = conn.fetch_msg(1)
+        self.assert_msg_equal(fetched_msg, msg)
+
+    @examine_mbox_test
+    def test_delete(self, conn, mbox, examiner):
+        # Add 2 messages
+        msg = random_message()
+        conn.append_msg(mbox, msg)
+        response = examiner.expect_event(b'EXISTS', 1)
+
+        msg = random_message()
+        conn.append_msg(mbox, msg)
+        response = examiner.expect_event(b'EXISTS', 2)
+
+        found_msgs = conn.search(b'ALL')
+        self.assert_equal(found_msgs, [1, 2])
+
+        # Delete the first message
+        msg_nums = conn.delete_msg(1, expunge_now=False)
+        # We should still be able to see the first message,
+        # given that we haven't expunged yet.
+        found_msgs = conn.search(b'ALL')
+        self.assert_equal(found_msgs, [1, 2])
+        found_msgs = conn.search(b'DELETED')
+        self.assert_equal(found_msgs, [1])
+        found_msgs = conn.search(b'NOT DELETED')
+        self.assert_equal(found_msgs, [2])
+
+        conn.expunge()
+        # The expect thread should see the expunge event
+        response = examiner.expect_event(b'EXPUNGE', 1)
+
+        found_msgs = conn.search(b'ALL')
+        self.assert_equal(found_msgs, [1])
+        found_msgs = conn.search(b'DELETED')
+        self.assert_equal(found_msgs, [])
+        found_msgs = conn.search(b'NOT DELETED')
+        self.assert_equal(found_msgs, [1])
+
+        msg_nums = conn.delete_msg(1, expunge_now=True)
+        response = examiner.expect_event(b'EXPUNGE', 1)
+        found_msgs = conn.search(b'ALL')
+        self.assert_equal(found_msgs, [])
+
+    @examine_mbox_test
+    def test_copy(self, dest_conn, dest_mbox, examiner):
+        with imap.login(self.account) as src_conn:
+            with self.tmp_mbox(src_conn) as src_mbox:
+                src_conn.select_mailbox(src_mbox.name)
+                msg = random_message()
+                src_conn.append_msg(src_mbox.name, msg)
+                src_conn.copy(1, dest_mbox)
+
+                response = examiner.expect_event(b'EXISTS', 1)
+                # Fetch the message from the dest mailbox,
+                # and make sure it is the same as the source message.
+                # We have to at least send a noop on the dest conn
+                # so that it sees an EXISTS response for the new message
+                # before it can fetch it.  Use wait_for_exists() to do this.
+                dest_conn.wait_for_exists(timeout=1)
+                fetched_msg = dest_conn.fetch_msg(1)
+                self.assert_msg_equal(fetched_msg, msg)
+
+    def tmp_mbox(self, conn):
+        return TmpMbox(conn, MAILBOX_PREFIX)
+
+    def examiner(self, mbox):
+        if isinstance(mbox, TmpMbox):
+            mbox = mbox.name
+        return MboxExaminer(self.account, mbox)
+
+    @classmethod
+    def clean_tmp_mailboxes(cls, account):
+        with imap.login(account) as conn:
+            responses = conn.list_mailboxes(MAILBOX_PREFIX, '*')
+            for response in responses:
+                mbox_name = response.mailbox.decode('ASCII', errors='strict')
+                print('Deleting mailbox "%s"' % mbox_name)
+                conn.delete_mailbox(response.mailbox)
+
+    def assert_equal(self, a, b):
+        self.assertEqual(a, b)
+
+    def assert_le(self, a, b):
+        self.assertLessEqual(a, b)
+
+    def assert_msg_equal(self, msg1, msg2):
+        self.assert_equal(msg1.to, msg2.to)
+        self.assert_equal(msg1.cc, msg2.cc)
+        self.assert_equal(msg1.from_addr, msg2.from_addr)
+        self.assert_equal(msg1.subject, msg2.subject)
+        self.assert_equal(int(msg1.timestamp),
+                          int(msg2.timestamp))
+        delta = msg1.datetime - msg2.datetime
+        self.assert_le(abs(delta), datetime.timedelta(seconds=1))
+        self.assert_equal(msg1.flags, msg2.flags)
+        self.assert_equal(msg1.custom_flags, set([b'\\Recent']))
+        self.assert_equal(msg1.body_text, msg2.body_text)
+        self.assert_equal(msg1.fingerprint(), msg2.fingerprint())
+
+
+class TestSuite:
+    def run_tests(self):
+        with self.test('delete'):
+            msg_nums = self.conn.delete_msg(1, expunge_now=True)
+            # The expect thread should see the expunge event
+            response = self.expect_examine_event(b'EXPUNGE')
+            self.assert_equal(response.number, 1)
 
 
 def main():
@@ -240,12 +397,19 @@ def main():
                     help='The password for connecting to the server')
     ap.add_argument('-S', '--ssl', type=bool, metavar='Y/N', default=None,
                     help='Use SSL')
+    ap.add_argument('-v', '--verbose',
+                    action='count', default=0,
+                    help='Increase the verbosity')
     ap.add_argument('--clean', action='store_true', default=False,
                     help='Clean test mailboxes from the server')
+    ap.add_argument('tests', nargs='*',
+                    help='Individual tests names to run')
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG)
+    if args.verbose > 0:
+        logging.basicConfig(level=logging.DEBUG)
 
+    account = None
     if args.server:
         if args.user is None or args.password is None:
             ap.error('--user and --password are both required when '
@@ -253,19 +417,28 @@ def main():
         account = imap.Account(server=args.server, port=args.port,
                                ssl=args.ssl, user=args.user,
                                password=args.password)
+        Tests.set_account(account)
 
-        ts = TestSuite(account)
-        if args.clean:
-            ts.clean()
-        else:
-            ts.run()
+    if args.clean:
+        if not account:
+            ap.error('--clean specified without --server')
+        Tests.clean_tmp_mailboxes(account)
+        return 0
+
+    loader = unittest.loader.TestLoader()
+    if args.tests:
+        module = sys.modules['__main__']
+        test_suite = loader.loadTestsFromNames(args.tests, module)
     else:
-        if args.clean:
-            ap.error('--clean can only be used with --server')
+        test_suite = loader.loadTestsFromTestCase(Tests)
 
-        with ImapServer() as server:
-            ts = TestSuite(server.get_account())
-            ts.run()
+    verbosity = 2
+    unittest.signals.installHandler()
+    runner = unittest.runner.TextTestRunner(verbosity=verbosity, buffer=False)
+    result = runner.run(test_suite)
+    if result.wasSuccessful():
+        return 0
+    return 1
 
 
 if __name__ == '__main__':

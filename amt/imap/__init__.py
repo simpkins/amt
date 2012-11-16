@@ -7,7 +7,7 @@ import time
 
 from .. import message
 
-from .err import ImapError, TimeoutError
+from .err import ImapError, ReadInterruptedError, TimeoutError
 from .conn_core import ConnectionCore
 from .constants import IMAP_PORT, IMAPS_PORT
 
@@ -156,6 +156,7 @@ class Connection(ConnectionCore):
         super().__init__(server=server, port=port, timeout=timeout)
 
         self._server_capabilities = None
+        self._mailbox_delim = None
         self.mailbox = None
 
         self.register_handler('CAPABILITY', self._on_capabilities)
@@ -186,6 +187,9 @@ class Connection(ConnectionCore):
                 raise ImapError('server did not send a CAPABILITY response')
         return self._server_capabilities
 
+    def has_nonsynch_literals(self):
+        return b'LITERAL+' in self.get_capabilities()
+
     def _on_capabilities(self, response):
         self._server_capabilities = response.capabilities
 
@@ -204,7 +208,7 @@ class Connection(ConnectionCore):
         self.mailbox.change_state(STATE_READ_WRITE)
 
     def change_state(self, new_state):
-        logging.debug('connection state change: %s', new_state)
+        self.debug('connection state change: %s', new_state)
         self.state = new_state
 
     def login(self, user, password):
@@ -216,6 +220,13 @@ class Connection(ConnectionCore):
         self.run_cmd(b'LOGIN', self.to_astring(user),
                      self.to_astring(password),
                      suppress_log=True)
+
+    def get_mailbox_delim(self):
+        if self._mailbox_delim is None:
+            responses = self.list_mailboxes('', '')
+            raw_delim = responses[0].delimiter
+            self._mailbox_delim = raw_delim.decode('ASCII', errors='strict')
+        return self._mailbox_delim
 
     def select_mailbox(self, mailbox, readonly=False):
         if self.mailbox is not None:
@@ -384,6 +395,15 @@ class Connection(ConnectionCore):
         if expunge_now:
             self.expunge()
 
+    def copy(self, msg_ids, dest):
+        msg_ids_arg = self._format_sequence_set(msg_ids)
+        mbox_arg = self._quote_mailbox_name(dest)
+        self.run_cmd(b'COPY', msg_ids_arg, mbox_arg)
+
+    def uid_copy(self, msg_uids, dest):
+        msg_uids_arg = self._format_sequence_set(msg_uids)
+        self.run_cmd(b'UID COPY', msg_uids_arg, dest)
+
     def add_flags(self, msg_ids, flags):
         '''
         Add the specified flags to the specified message(s)
@@ -486,13 +506,27 @@ class Connection(ConnectionCore):
             self.wait_for_response(b'+')
             try:
                 self.wait_for_response(tag, timeout=timeout)
+            except ReadInterruptedError:
+                self.send_line(b'DONE')
+                self.wait_for_response(tag)
             except TimeoutError:
                 self.send_line(b'DONE')
                 self.wait_for_response(tag)
         finally:
             self._idling = False
 
+    def stop_idle_threadsafe(self):
+        '''
+        Stop a currently running idle() call.
+
+        stop_idle_threadsafe() is safe to call from any thread.
+        '''
+        self.interrupt_waiting()
+
     def stop_idle(self):
+        '''
+        Stop a currently running idle() call.
+        '''
         if not self._idling:
             raise ImapError('attempted to stop IDLE when no IDLE command '
                             'in progress')
@@ -517,22 +551,9 @@ class Connection(ConnectionCore):
         which will also trigger wait_for_exists() to return.
         '''
         # TODO: It would be nice to ignore EXISTS responses if the response
-        # already matches the current number of messages.  This would allow us
-        # to ignore the extraneous EXISTS responses from MS Exchange, without
-        # waking up from the IDLE call.
-        if b'IDLE' not in self.get_capabilities():
-            self.poll_for_new_message(timeout=timeout,
-                                      poll_interval=poll_interval)
-            return
-
-        # TODO: This timeout argument doesn't behave like the timeout argument
-        # for most other Connection methods.  Here, a timeout of None really
-        # means no timeout, rather than use the default timeout.
-        if timeout is None:
-            end_time = None
-        else:
-            end_time = time.time() + timeout
-
+        # already matches the current number of messages.  This would allow
+        # us to ignore the extraneous EXISTS responses from MS Exchange,
+        # without waking up from the IDLE call.
         seen_exists = False
         def on_exists(response):
             nonlocal seen_exists
@@ -541,12 +562,36 @@ class Connection(ConnectionCore):
             seen_exists = True
 
         with self.untagged_handler('EXISTS', on_exists):
+            # Note that calling self.get_capabilities() may send a command
+            # which causes us to see an EXISTS response.
+            caps = self.get_capabilities()
+            if seen_exists:
+                return
+
+            if b'IDLE' not in caps:
+                self.poll_for_new_message(timeout=timeout,
+                                          poll_interval=poll_interval)
+                return
+
+            # TODO: This timeout argument doesn't behave like the timeout
+            # argument for most other Connection methods.  Here, a timeout of
+            # None really means no timeout, rather than use the default
+            # timeout.
+            if timeout is None:
+                end_time = None
+            else:
+                end_time = time.time() + timeout
+
+            MAX_IDLE_TIME = 29 * 60
             while not seen_exists:
                 if end_time is not None:
-                    time_left = time.time() - end_time
+                    time_left = end_time - time.time()
                     if time_left < 0:
                         raise TimeoutError('timed out waiting for new message')
-                self.idle()
+                    idle_timeout = min(time_left, MAX_IDLE_TIME)
+                else:
+                    idle_timeout = MAX_IDLE_TIME
+                self.idle(idle_timeout)
 
     def poll_for_exists(self, timeout=None, poll_interval=30):
         # TODO: This timeout argument doesn't behave like the timeout argument

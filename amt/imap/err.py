@@ -35,5 +35,9 @@ class TimeoutError(ImapError):
     pass
 
 
+class ReadInterruptedError(ImapError):
+    pass
+
+
 class EOFError(ImapError):
     pass

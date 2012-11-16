@@ -45,7 +45,7 @@ class CommandSplitter:
     CommandSplitter expects to receive input as bytes, and will also pass the
     command parts to cmd_callback as bytes.
     '''
-    def __init__(self, cmd_callback):
+    def __init__(self, cmd_callback, conn_id=None):
         # A list of the command parts.  This is an alternating list of
         # lines and literal tokens.  A fully parsed command always starts and
         # ends with a line.
@@ -67,6 +67,8 @@ class CommandSplitter:
         # The callback to invoke when we have a full command available
         # This will be invoked with the self._cmd_parts list
         self.cmd_callback = cmd_callback
+
+        self._conn_id = conn_id
 
     def feed(self, data):
         assert isinstance(data, (bytes, bytearray))
@@ -157,7 +159,12 @@ class CommandSplitter:
     def _on_full_line(self):
         assert self._current_bufs
         line = b''.join(self._current_bufs)
-        logging.debug('Response line: %s', line)
+
+        if self._conn_id is None:
+            logging.debug('Response line: %s', line)
+        else:
+            logging.debug('conn %d: Response line: %s', self._conn_id, line)
+
         self._current_bufs = []
         line, literal_count = self._strip_literal_length(line)
         self._cmd_parts.append(line)

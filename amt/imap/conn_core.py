@@ -4,11 +4,14 @@
 #
 import datetime
 import errno
+import fcntl
 import logging
+import os
 import random
 import select
 import socket
 import ssl
+import threading
 import time
 
 from .. import ssl_util
@@ -36,8 +39,8 @@ class ResponseStream:
     ResponseStream accepts raw IMAP response data via the feed() method,
     and invokes a callback with the parsed responses.
     '''
-    def __init__(self, callback):
-        self.splitter = CommandSplitter(self._on_cmd)
+    def __init__(self, callback, conn_id=None):
+        self.splitter = CommandSplitter(self._on_cmd, conn_id)
         self.callback = callback
 
     def feed(self, data):
@@ -89,6 +92,19 @@ class HandlerDict:
         return token
 
 
+_conn_id_lock = threading.Lock()
+_next_conn_id = 1
+
+
+def get_conn_id():
+    global _conn_id_lock
+    global _next_conn_id
+    with _conn_id_lock:
+        conn_id = _next_conn_id
+        _next_conn_id += 1
+        return conn_id
+
+
 class ConnectionCore:
     '''
     Very basic functionality for an IMAP connection.
@@ -97,8 +113,10 @@ class ConnectionCore:
     untagged responses.
     '''
     def __init__(self, server, port=None, timeout=60):
+        self._conn_id = get_conn_id()
+
         self._responses = []
-        self._parser = ResponseStream(self._on_response)
+        self._parser = ResponseStream(self._on_response, self._conn_id)
         self.default_response_timeout = timeout
         self.default_send_timeout = timeout
 
@@ -111,6 +129,8 @@ class ConnectionCore:
         self._response_handlers = HandlerDict()
         # _response_code_handlers is indexed by the response code token
         self._response_code_handlers = HandlerDict()
+
+        self._init_interrupt()
 
     def _connect_sock(self, server, port, timeout, use_ssl):
         if port is None:
@@ -153,15 +173,17 @@ class ConnectionCore:
         self.wait_for_response(tag)
 
     def has_nonsynch_literals(self):
-        return b'LITERAL+' in self.get_capabilities()
+        # has_nonsynch_literals() should normally be overridden by
+        # subclasses that can determine if LITERAL+ is listed in the server's
+        # capabilities.
+        return False
 
     def send_request(self, command, *args, suppress_log=False):
         tag = self.get_new_tag()
         args = (tag, command) + args
-        nonsynch = self.has_nonsynch_literals()
 
         if suppress_log:
-            logging.debug('sending:  %r <args suppressed>', command)
+            self.debug('sending:  %r <args suppressed>', command)
 
         parts = []
         cur_part = []
@@ -171,6 +193,9 @@ class ConnectionCore:
                 parts.append(cur_part)
                 cur_part = []
         parts.append(cur_part)
+
+        if len(parts) > 1:
+            nonsynch = self.has_nonsynch_literals()
 
         for part in parts[:-1]:
             literal = part[-1]
@@ -183,26 +208,26 @@ class ConnectionCore:
 
             data = b' '.join(part)
             if not suppress_log:
-                logging.debug('sending:  %r', data)
+                self.debug('sending:  %r', data)
             self._sendall(data + b'\r\n')
 
             if not nonsynch:
                 self.wait_for_response(b'+')
 
             if not suppress_log:
-                logging.debug('sending %d bytes', len(literal.data))
+                self.debug('sending %d bytes', len(literal.data))
             self._sendall(literal.data)
 
         part = parts[-1]
         data = b' '.join(part)
         if not suppress_log:
-            logging.debug('sending:  %r', data)
+            self.debug('sending:  %r', data)
         self._sendall(data + b'\r\n')
 
         return tag
 
     def send_line(self, data, timeout=None):
-        logging.debug('sending:  %r', data)
+        self.debug('sending:  %r', data)
         self._sendall(data + b'\r\n')
 
     def _sendall(self, data, timeout=None):
@@ -271,18 +296,67 @@ class ConnectionCore:
                                   'socket to become writable')
 
     def _wait_for_sock_ready(self, events, end_time, msg):
-        # Figure out how long we can wait
-        time_left = end_time - time.time()
-        if time_left < 0:
-            raise TimeoutError('timed out waiting on %s', msg)
-        time_left_ms = time_left * 1000
+
+        # Before we sleep waiting on events, check to see if someone
+        # has already requested that we wake up.
+        self._check_for_recv_interrupt()
 
         p = select.poll()
         p.register(self.sock.fileno(), events)
-        ret = p.poll(time_left_ms)
-        if not ret:
+        p.register(self._interrupt_fds[0], select.POLLIN)
+
+        while True:
+            # Figure out how long we can wait
+            time_left = end_time - time.time()
+            if time_left < 0:
+                raise TimeoutError('timed out waiting on %s', msg)
+            time_left_ms = time_left * 1000
+
+            ret = p.poll(time_left_ms)
+
+            ready = set(fd for fd, ready_events in ret)
+            if self.sock.fileno() in ready:
+                # We are ready
+                self._clear_recv_interrupt()
+                return
+
+            if self._interrupt_fds[0] in ready:
+                self._check_for_recv_interrupt()
+                continue
+
+            # If we are still here, nothing is ready, which means
+            # we must have timed out
             raise TimeoutError('timed out waiting on %s', msg)
 
+    def interrupt_waiting(self):
+        self._recv_interrupt.set()
+        os.write(self._interrupt_fds[1], b'x')
+
+    def _clear_recv_interrupt_pipe(self):
+        # Read all notification events of the _interrupt_fds pipe
+        try:
+            os.read(self._interrupt_fds[0], 1024)
+        except (IOError, OSError) as ex:
+            if ex.errno != errno.EAGAIN:
+                raise
+
+    def _check_for_recv_interrupt(self):
+        self._clear_recv_interrupt_pipe()
+        if self._recv_interrupt.is_set():
+            self._recv_interrupt.clear()
+            raise ReadInterruptedError('read explicitly interrupted')
+
+    def _clear_recv_interrupt(self):
+        self._clear_recv_interrupt_pipe()
+        self._recv_interrupt.clear()
+
+    def _init_interrupt(self):
+        self._recv_interrupt = threading.Event()
+        self._interrupt_fds = os.pipe()
+
+        for fd in self._interrupt_fds:
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
     def wait_for_response(self, tag, timeout=None):
         if timeout is None:
@@ -298,7 +372,7 @@ class ConnectionCore:
                 break
 
             if resp.tag == b'+':
-                logging.debug('unexpected continuation response')
+                self.debug('unexpected continuation response')
                 continue
 
             raise ImapError('unexpected response tag: %s', resp)
@@ -328,8 +402,8 @@ class ConnectionCore:
             handler(response)
 
         if not handled and response.tag == b'*':
-            logging.debug('unhandled untagged response: %r',
-                          response.resp_type)
+            self.debug('unhandled untagged response: %r',
+                       response.resp_type)
 
     def process_response_code(self, response):
         token = response.code.token
@@ -339,7 +413,7 @@ class ConnectionCore:
             handler(response)
 
         if not handled:
-            logging.debug('unhandled response code: %r' % (token,))
+            self.debug('unhandled response code: %r' % (token,))
 
         return handled
 
@@ -431,6 +505,11 @@ class ConnectionCore:
         raise TypeError('expected a numeric message ID or a string '
                         'message range, got %s: %r' %
                         (type(value).__name__, value))
+
+    def debug(self, msg, *args):
+        if args:
+            msg = msg % args
+        logging.debug('conn %d: %s', self._conn_id, msg)
 
 
 class ResponseHandlerCtx:
