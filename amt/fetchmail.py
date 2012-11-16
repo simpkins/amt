@@ -3,6 +3,7 @@
 # Copyright (c) 2012, Adam Simpkins
 #
 import logging
+import time
 
 from . import imap
 from .getpassword import get_password
@@ -109,6 +110,12 @@ class Scanner:
 
 class SeqIDScanner(Scanner):
     def __init__(self, *args, **kwargs):
+        if 'backup_mbox' in kwargs:
+            self.backup_mbox = kwargs['backup_mbox']
+            del kwargs['backup_mbox']
+        else:
+            self.backup_mbox = None
+
         super().__init__(*args, **kwargs)
 
     def _post_open(self):
@@ -116,11 +123,15 @@ class SeqIDScanner(Scanner):
         self.next_msg = 1
         self.conn.register_handler('EXPUNGE', self._on_expunge)
 
+        if self.backup_mbox is not None:
+            self.conn.ensure_mailbox(self.backup_mbox)
+
     def _on_expunge(self, response):
-        if response.number == self.current_msg:
-            self.current_msg = None
-        elif response.number < self.current_msg:
-            self.current_msg -= 1
+        if self.current_msg is not None:
+            if response.number == self.current_msg:
+                self.current_msg = None
+            elif response.number < self.current_msg:
+                self.current_msg -= 1
 
         if response.number < self.next_msg:
             self.next_msg -= 1
@@ -145,12 +156,31 @@ class SeqIDScanner(Scanner):
                 return
 
     def run_forever(self):
-        self.ensure_open()
+        last_connect = time.time()
 
         while True:
-            self._run_once()
-            _log.debug('waiting for new messages...')
-            self.conn.wait_for_exists()
+            try:
+                self.ensure_open()
+
+                self._run_once()
+                _log.debug('waiting for new messages...')
+                self.conn.wait_for_exists()
+            except IOError as ex:
+                _log.debug('I/O error: %s', ex)
+                try:
+                    self.conn.close()
+                except:
+                    pass
+                self.conn = None
+
+                # Only reconnect once every 30 seconds,
+                # to avoid hammering the server in a loop if something
+                # is going wrong.
+                min_retry_time = last_connect + 30
+                now = time.time()
+                if now < min_retry_time:
+                    time.sleep(min_retry_time - now)
+                last_connect = time.time()
 
     def process_next_msg(self):
         assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
@@ -163,8 +193,11 @@ class SeqIDScanner(Scanner):
                    self.next_msg, self.conn.mailbox.num_messages)
 
         self.current_msg = self.next_msg
-        msg = self.conn.fetch_msg(self.current_msg)
         self.next_msg += 1
+
+        msg = self.conn.fetch_msg(self.current_msg)
+        if self.backup_mbox is not None:
+            self.copy_msg(self.backup_mbox)
         self.invoke_processor(msg)
 
     def msg_successful(self):
@@ -172,6 +205,10 @@ class SeqIDScanner(Scanner):
 
     def msg_failed(self):
         self.current_msg = None
+
+    def copy_msg(self):
+        if self.backup_mbox is not None:
+            self.copy_msg(self.backup_mbox)
 
     def invoke_processor(self, msg):
         # TODO: implement some sort of retry functionality on error
@@ -185,6 +222,11 @@ class SeqIDScanner(Scanner):
             raise ProcessorError(msg, ret)
 
         self.msg_successful()
+
+    def copy_msg(self, dest):
+        if self.current_msg is None:
+            raise Exception('current message has already been deleted')
+        self.conn.copy(self.current_msg, dest)
 
 
 class FetchAllScanner(SeqIDScanner):

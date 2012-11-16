@@ -273,6 +273,21 @@ class Connection(ConnectionCore):
     def create_mailbox(self, mailbox):
         self.run_cmd(b'CREATE', self._quote_mailbox_name(mailbox))
 
+    def ensure_mailbox(self, mailbox):
+        '''
+        Ensure that the specified mailbox exists.
+
+        If the mailbox already exists, does nothing.  Otherwise it creates the
+        mailbox.
+        '''
+        # TODO: make sure the mailbox name does not contain any wildcards
+        responses = self.list_mailboxes('', mailbox)
+        for response in responses:
+            if response.mailbox.decode('utf-8') == mailbox:
+                # The mailbox already exists
+                return
+        self.create_mailbox(mailbox)
+
     def delete_mailbox(self, mailbox):
         self.run_cmd(b'DELETE', self._quote_mailbox_name(mailbox))
 

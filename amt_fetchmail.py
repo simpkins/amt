@@ -29,9 +29,9 @@ def main():
     amt.fetchmail._log.setLevel(logging.DEBUG)
 
     config = amt.config.load_config(args.config_path)
-    account.prepare_password()
 
     scanner = config.config_dict['fetchmail_scanner']
+    scanner.account.prepare_password()
     scanner.run_forever()
 
 
