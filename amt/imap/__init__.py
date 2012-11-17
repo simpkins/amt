@@ -11,12 +11,12 @@ from .err import ImapError, ReadInterruptedError, TimeoutError
 from .conn_core import ConnectionCore
 from .constants import IMAP_PORT, IMAPS_PORT
 
-FLAG_SEEN = r'\Seen'
-FLAG_ANSWERED = r'\Answered'
-FLAG_FLAGGED = r'\Flagged'
-FLAG_DELETED = r'\Deleted'
-FLAG_DRAFT =  r'\Draft'
-FLAG_RECENT =  r'\Recent'
+FLAG_SEEN = br'\Seen'
+FLAG_ANSWERED = br'\Answered'
+FLAG_FLAGGED = br'\Flagged'
+FLAG_DELETED = br'\Deleted'
+FLAG_DRAFT =  br'\Draft'
+FLAG_RECENT =  br'\Recent'
 
 STATE_NOT_AUTHENTICATED = 'not auth'
 STATE_AUTHENTICATED = 'auth'
@@ -448,10 +448,15 @@ class Connection(ConnectionCore):
         self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=True)
 
     def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
-        if isinstance(flags, str):
+        if isinstance(flags, (str, bytes, bytearray)):
             flags = [flags]
-        flags_arg = '(%s)' % ' '.join(flags)
-        flags_arg = flags_arg.encode('ASCII', errors='strict')
+        encoded_flags = []
+        for flag in flags:
+            if isinstance(flags, str):
+                flag = flag.encode('ASCII', errors='strict')
+            encoded_flags.append(flag)
+
+        flags_arg = b''.join([b'(', b' '.join(encoded_flags), b')'])
 
         msg_ids_arg = self._format_sequence_set(msg_ids)
         if use_uids:
@@ -469,8 +474,7 @@ class Connection(ConnectionCore):
         args.append(self._quote_mailbox_name(mailbox))
 
         imap_flags = self.get_imap_flags(msg)
-        imap_flags_str = b' '.join(f.encode('ASCII', errors='strict')
-                                   for f in imap_flags)
+        imap_flags_str = b' '.join(imap_flags)
         if imap_flags_str:
             flags_arg = b'(' + imap_flags_str + b')'
             args.append(flags_arg)
@@ -481,11 +485,11 @@ class Connection(ConnectionCore):
         self.run_cmd(b'APPEND', *args)
 
     def get_imap_flags(self, msg):
-        flags = set()
+        flags = set([FLAG_SEEN])
 
         for flag in msg.flags:
-            if flag == message.Message.FLAG_SEEN:
-                flags.add(FLAG_SEEN)
+            if flag == message.Message.FLAG_NEW:
+                flags.discard(FLAG_SEEN)
             elif flag == message.Message.FLAG_REPLIED_TO:
                 flags.add(FLAG_ANSWERED)
             elif flag == message.Message.FLAG_FLAGGED:
@@ -496,6 +500,8 @@ class Connection(ConnectionCore):
                 flags.add(FLAG_DRAFT)
 
         for flag in msg.custom_flags:
+            if isinstance(flag, str):
+                flag = flag.encode('ascii', errors='strict')
             flags.add(flag)
 
         return flags
@@ -643,11 +649,12 @@ def fetch_response_to_msg(response):
     timestamp = response[b'INTERNALDATE']
     imap_flags = response[b'FLAGS']
 
-    flags = set()
+    flags = set([message.Message.FLAG_NEW])
     custom_flags = set()
     for flag in imap_flags:
+        # The imap \Seen flag tends to mean !new for most clients
         if flag == FLAG_SEEN:
-            flags.add(message.Message.FLAG_SEEN)
+            flags.discard(message.Message.FLAG_NEW)
         elif flag == FLAG_ANSWERED:
             flags.add(message.Message.FLAG_REPLIED_TO)
         elif flag == FLAG_FLAGGED:

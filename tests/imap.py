@@ -361,13 +361,19 @@ class Tests(imap_server.ImapTests):
     def assert_le(self, a, b):
         self.assertLessEqual(a, b)
 
+    def assert_close(self, a, b, tolerance):
+        if abs(a - b) <= tolerance:
+            return
+        self.fail('expected %r and %r to be within %r of each other' %
+                  (a, b, tolerance))
+
     def assert_msg_equal(self, msg1, msg2):
         self.assert_equal(msg1.to, msg2.to)
         self.assert_equal(msg1.cc, msg2.cc)
         self.assert_equal(msg1.from_addr, msg2.from_addr)
         self.assert_equal(msg1.subject, msg2.subject)
-        self.assert_equal(int(msg1.timestamp),
-                          int(msg2.timestamp))
+        self.assert_close(int(msg1.timestamp),
+                          int(msg2.timestamp), tolerance=2)
         delta = msg1.datetime - msg2.datetime
         self.assert_le(abs(delta), datetime.timedelta(seconds=1))
         self.assert_equal(msg1.flags, msg2.flags)
