@@ -10,12 +10,14 @@ import pwd
 from . import getpassword
 from .imap.constants import IMAP_PORT, IMAPS_PORT
 from . import fetchmail
+from . import maildir
 
 
 def load_config(path):
     params = {
         'Account': Account,
         'fetchmail': fetchmail,
+        'maildir': maildir,
     }
 
     with open(path, 'r') as f:

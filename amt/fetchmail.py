@@ -206,10 +206,6 @@ class SeqIDScanner(Scanner):
     def msg_failed(self):
         self.current_msg = None
 
-    def copy_msg(self):
-        if self.backup_mbox is not None:
-            self.copy_msg(self.backup_mbox)
-
     def invoke_processor(self, msg):
         # TODO: implement some sort of retry functionality on error
         try:

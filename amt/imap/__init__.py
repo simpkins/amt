@@ -281,9 +281,10 @@ class Connection(ConnectionCore):
         mailbox.
         '''
         # TODO: make sure the mailbox name does not contain any wildcards
+        mailbox = self._encode_mailbox_name(mailbox)
         responses = self.list_mailboxes('', mailbox)
         for response in responses:
-            if response.mailbox.decode('utf-8') == mailbox:
+            if response.mailbox == mailbox:
                 # The mailbox already exists
                 return
         self.create_mailbox(mailbox)
@@ -291,11 +292,24 @@ class Connection(ConnectionCore):
     def delete_mailbox(self, mailbox):
         self.run_cmd(b'DELETE', self._quote_mailbox_name(mailbox))
 
-    def _quote_mailbox_name(self, mailbox):
+    def _encode_mailbox_name(self, mailbox):
+        if isinstance(mailbox, tuple):
+            encoded = []
+            for elem in mailbox:
+                if isinstance(elem, str):
+                    elem = elem.encode('ASCII', errors='strict')
+                encoded.append(elem)
+            delim = self.get_mailbox_delim().encode('ASCII', errors='strict')
+            return delim.join(encoded)
+
         if isinstance(mailbox, str):
             # RFC 3501 states mailbox names should be 7-bit only
-            mailbox = mailbox.encode('ASCII', errors='strict')
+            return mailbox.encode('ASCII', errors='strict')
 
+        return mailbox
+
+    def _quote_mailbox_name(self, mailbox):
+        mailbox = self._encode_mailbox_name(mailbox)
         return self.to_astring(mailbox)
 
     def search(self, *criteria):
