@@ -144,7 +144,17 @@ def get_password_input(account=None, server=None, user=None,
     return getpass.getpass(prompt)
 
 
+_cached_home_dir = None
+
+
 def get_home_dir():
+    global _cached_home_dir
+    if _cached_home_dir is None:
+        _cached_home_dir = compute_home_dir()
+    return _cached_home_dir
+
+
+def compute_home_dir():
     home_dir = os.environ.get('HOME')
     if home_dir is not None:
         return home_dir
@@ -152,6 +162,14 @@ def get_home_dir():
     uid = os.geteuid()
     pwent = pwd.getpwuid(uid)
     return pwent.pw_dir
+
+
+def expand_path(path):
+    if path == '~':
+        return get_home_dir()
+    if path.startswith('~' + os.path.sep):
+        return get_home_dir() + path[1:]
+    return path
 
 
 def default_maildb_path():
