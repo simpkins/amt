@@ -13,8 +13,9 @@ import amt.fetchmail
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('config_path', metavar='CONFIG_PATH',
-                        help='The path to the configuration module')
+    parser.add_argument('-c', '--config', metavar='CONFIG_DIR',
+                        default='~/.amt',
+                        help='The path to the configuration directory')
     parser.add_argument('-v', '--verbose', dest='verbose', action='count',
                         default=1, help='Increase the verbosity')
 
@@ -25,13 +26,16 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO)
 
+    # TODO: Add a lock file, to ensure that two fetchmail instances aren't
+    # running at once.
+
     # TODO: Put a more generic mechanism in place for showing diagnostic output
     amt.fetchmail._log.setLevel(logging.DEBUG)
 
-    config = amt.config.load_config(args.config_path)
-
-    scanner = config.config_dict['fetchmail_scanner']
+    amt_config = amt.config.load_config(args.config)
+    scanner = amt_config.fetchmail.get_scanner()
     scanner.account.prepare_password()
+
     scanner.run_forever()
 
 

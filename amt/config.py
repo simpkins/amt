@@ -6,6 +6,7 @@ import getpass
 import imp
 import os
 import pwd
+import sys
 
 from . import getpassword
 from .imap.constants import IMAP_PORT, IMAPS_PORT
@@ -14,17 +15,25 @@ from . import maildir
 
 
 def load_config(path):
-    params = {
-        'Account': Account,
-        'fetchmail': fetchmail,
-        'maildir': maildir,
-    }
+    path = expand_path(path)
 
-    with open(path, 'r') as f:
-        data = f.read()
-        exec(data, params, params)
+    try:
+        info = imp.find_module('__init__', [path])
+    except ImportError:
+        amt_config = imp.new_module('amt_config')
+    else:
+        amt_config = imp.load_module('amt_config', *info)
+    sys.modules['amt_config'] = amt_config
 
-    return Config(params)
+    info = imp.find_module('classify', [path])
+    classify_module = imp.load_module('amt_config.classify', *info)
+    amt_config.classify = classify_module
+
+    info = imp.find_module('fetchmail', [path])
+    fetchmail_module = imp.load_module('amt_config.fetchmail', *info)
+    amt_config.fetchmail = fetchmail_module
+
+    return amt_config
 
 
 class Config:
