@@ -2,16 +2,28 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import errno
 import getpass
+import fcntl
 import imp
 import os
 import pwd
 import sys
+import tempfile
 
 from . import getpassword
 from .imap.constants import IMAP_PORT, IMAPS_PORT
 from . import fetchmail
 from . import maildir
+
+
+def _try_load_module(config, name):
+    try:
+        info = imp.find_module(name, [config.config_path])
+    except ImportError:
+        return
+    module = imp.load_module('amt_config.' + name, *info)
+    setattr(config, name, module)
 
 
 def load_config(path):
@@ -24,14 +36,11 @@ def load_config(path):
     else:
         amt_config = imp.load_module('amt_config', *info)
     sys.modules['amt_config'] = amt_config
+    amt_config.config_path = path
 
-    info = imp.find_module('classify', [path])
-    classify_module = imp.load_module('amt_config.classify', *info)
-    amt_config.classify = classify_module
-
-    info = imp.find_module('fetchmail', [path])
-    fetchmail_module = imp.load_module('amt_config.fetchmail', *info)
-    amt_config.fetchmail = fetchmail_module
+    _try_load_module(amt_config, 'accounts')
+    _try_load_module(amt_config, 'classify')
+    _try_load_module(amt_config, 'fetchmail')
 
     return amt_config
 
@@ -127,6 +136,69 @@ class Account:
 
     def prepare_password(self):
         self._password = self._password_fn(account=self)
+
+
+class LockError(Exception):
+    pass
+
+
+class LockFile:
+    def __init__(self, path):
+        self.path = path
+
+        self.fd = None
+        self.acquire()
+
+    def acquire(self):
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                self._try_acquire()
+                return
+            except LockError as ex:
+                ex_msg = str(ex)
+
+            try:
+                fd = os.open(self.path, os.O_RDONLY)
+            except OSError as ex:
+                if ex.errno == os.ENOENT:
+                    # Hmm, the file doesn't exist any more.  Retry
+                    continue
+
+            # TODO: Check to see if this lock looks stale
+            raise LockError(ex_msg)
+
+        raise LockError('failed to acquire lock %s after %d attempts' %
+                        (self.path, max_attempts))
+
+    def _try_acquire(self):
+        try:
+            self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                              0o644)
+        except OSError as ex:
+            if ex.errno == errno.EEXIST:
+                raise LockError('failed to acquire lock: %s' % self.path)
+            raise
+
+        # TODO: Write info about the current process into the file
+
+        # Acquire a lock on the file too.  This will help check for stale locks
+        # if the file already exists.
+        fcntl.lockf(self.fd, fcntl.LOCK_EX)
+
+    def release(self):
+        if self.fd is None:
+            raise Exception('attempted to release %s without holding '
+                            'the lock' % self.path)
+        os.unlink(self.path)
+        os.close(self.fd)
+        self.fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release()
 
 
 def get_password_keyring(account=None, server=None, user=None,

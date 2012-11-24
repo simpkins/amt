@@ -185,8 +185,7 @@ class SeqIDScanner(Scanner):
     def process_next_msg(self):
         assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
         if self.next_msg > self.conn.mailbox.num_messages:
-            _log.debug('finished processing %d available messages',
-                       self.conn.mailbox.num_messages)
+            _log.debug('finished processing available messages')
             raise NoMoreMessagesError()
 
         _log.debug('processing message %d of %d',

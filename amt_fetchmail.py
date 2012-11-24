@@ -5,6 +5,7 @@
 #
 import argparse
 import logging
+import os
 import sys
 
 import amt.config
@@ -34,9 +35,11 @@ def main():
 
     amt_config = amt.config.load_config(args.config)
     scanner = amt_config.fetchmail.get_scanner()
-    scanner.account.prepare_password()
 
-    scanner.run_forever()
+    lock_path = os.path.join(amt_config.config_path, 'fetchmail.lock')
+    with amt.config.LockFile(lock_path):
+        scanner.account.prepare_password()
+        scanner.run_forever()
 
 
 if __name__ == '__main__':
