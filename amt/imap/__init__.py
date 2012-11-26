@@ -7,6 +7,7 @@ import time
 
 from .. import message
 
+from . import err
 from .err import ImapError, ReadInterruptedError, TimeoutError
 from .conn_core import ConnectionCore
 from .constants import IMAP_PORT, IMAPS_PORT
@@ -531,6 +532,9 @@ class Connection(ConnectionCore):
         If stop_idle() is not called before the timeout expires,
         idle() stops idling and returns normally.  It does not raise a
         TimeoutError.
+
+        (Note that a TimeoutError may still be raised if the server does not
+        respond to the DONE command to terminate the idle state.)
         '''
         if b'IDLE' not in self.get_capabilities():
             raise ImapError('server does not support the IDLE extension')

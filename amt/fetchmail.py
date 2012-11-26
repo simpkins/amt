@@ -149,6 +149,10 @@ class SeqIDScanner(Scanner):
         self._run_once()
 
     def _run_once(self):
+        assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
+        num_available = self.conn.mailbox.num_messages + 1 - self.next_msg
+        _log.debug('processing %d available messages', num_available)
+
         while True:
             try:
                 self.process_next_msg()
@@ -165,7 +169,7 @@ class SeqIDScanner(Scanner):
                 self._run_once()
                 _log.debug('waiting for new messages...')
                 self.conn.wait_for_exists()
-            except IOError as ex:
+            except (IOError, imap.TimeoutError) as ex:
                 _log.debug('I/O error: %s', ex)
                 try:
                     self.conn.close()
