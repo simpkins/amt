@@ -6,10 +6,14 @@ import errno
 import getpass
 import fcntl
 import imp
+import logging
 import os
 import pwd
+import re
+import struct
 import sys
 import tempfile
+import time
 
 from . import getpassword
 from .imap.constants import IMAP_PORT, IMAPS_PORT
@@ -143,11 +147,26 @@ class LockError(Exception):
 
 
 class LockFile:
+    LOCK_INFO_MSG = ('pid={pid}\n'
+                     'acquire_time={acquire_time}\n')
+    LOCK_INFO_PATTERN = (br'pid=(?P<pid>\d+)\n'
+                         br'acquire_time=(?P<acquire_time>\d+(.\d*)?)\n')
+
     def __init__(self, path):
         self.path = path
 
         self.fd = None
         self.acquire()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release()
+
+    def __del__(self):
+        if self.fd is not None:
+            self.release()
 
     def acquire(self):
         max_attempts = 3
@@ -158,14 +177,13 @@ class LockFile:
             except LockError as ex:
                 ex_msg = str(ex)
 
-            try:
-                fd = os.open(self.path, os.O_RDONLY)
-            except OSError as ex:
-                if ex.errno == os.ENOENT:
-                    # Hmm, the file doesn't exist any more.  Retry
-                    continue
+            # We couldn't acquire the lock file.
+            # Check to see if it looks stale.
+            if self._check_stale():
+                # The lock looked stale, and _check_stale removed it.
+                # Retry.
+                continue
 
-            # TODO: Check to see if this lock looks stale
             raise LockError(ex_msg)
 
         raise LockError('failed to acquire lock %s after %d attempts' %
@@ -180,11 +198,72 @@ class LockFile:
                 raise LockError('failed to acquire lock: %s' % self.path)
             raise
 
-        # TODO: Write info about the current process into the file
+        # Write info about the current process into the file
+        info = self.LOCK_INFO_MSG.format(pid=os.getpid(),
+                                         acquire_time=time.time())
+        os.write(self.fd, info.encode('utf-8'))
+        os.fsync(self.fd)
 
-        # Acquire a lock on the file too.  This will help check for stale locks
-        # if the file already exists.
-        fcntl.lockf(self.fd, fcntl.LOCK_EX)
+        # Acquire a lock on the file too.
+        # This will help check for stale locks if the file already exists.
+        fcntl.lockf(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _check_stale(self):
+        # Since we may end up removing the file,
+        # create a brief lockfile to ensure that no one else is trying to
+        # remove the file at the same time.
+        stale_lock_path = self.path + '.stale_check_lock'
+        try:
+            tmp_lock_fd = os.open(stale_lock_path,
+                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                                  0o644)
+        except:
+            return False
+
+        try:
+            return self._check_stale_impl()
+        finally:
+            os.close(tmp_lock_fd)
+            os.unlink(stale_lock_path)
+
+
+    def _check_stale_impl(self):
+        logging.debug('%s: checking for stale lock', self.path)
+        try:
+            fd = os.open(self.path, os.O_RDWR)
+        except OSError as ex:
+            if ex.errno == os.ENOENT:
+                # Hmm, the file seems to have been removed since we
+                # first tried to acquire it.  We can retry now.
+                return True
+
+        try:
+            # Check to see if the file is locked.
+            try:
+                fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except Exception as ex:
+                logging.debug('%s: lock appears to be held: %s',
+                              self.path, ex)
+                return False
+
+            # Read the file contents
+            data = os.read(fd, 1024)
+            m = re.match(self.LOCK_INFO_PATTERN, data)
+            if not m:
+                # We couldn't parse the file contents
+                logging.debug('%s: unable to parse lockfile contents')
+                return False
+
+            pid = m.group('pid')
+            acquire_time = m.group('acquire_time')
+            # TODO: Check to see if the original owner process is still running
+
+            # The lock looks stale
+            logging.debug('%s: removing stale lock file')
+            os.unlink(self.path)
+            return True
+        finally:
+            os.close(fd)
 
     def release(self):
         if self.fd is None:
@@ -193,12 +272,6 @@ class LockFile:
         os.unlink(self.path)
         os.close(self.fd)
         self.fd = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.release()
 
 
 def get_password_keyring(account=None, server=None, user=None,
