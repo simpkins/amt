@@ -6,6 +6,7 @@ import base64
 import datetime
 import email.generator
 import email.header
+import email.headerregistry
 import email.message
 import email.parser
 import email.policy
@@ -270,6 +271,20 @@ class Message:
         return them as an AddressList.
         '''
         values = self.get_all(header, [])
+
+        # The new email.policy code is rather awkward to use
+        # if you want to instantiate specific header types on your own
+        # rather than registering name --> type mappings ahead of time.
+        cls = type('AddressHeader',
+                   (email.headerregistry.AddressHeader,
+                    email.headerregistry.BaseHeader),
+                   {})
+        addresses = []
+        for value in values:
+            header_obj = cls(header, value)
+            addresses.extend(header_obj.addresses)
+        return addresses
+
         addresses = email.utils.getaddresses(values)
         return AddressList(addresses)
 
@@ -502,25 +517,6 @@ class MultipartAlternativeSelector:
 
         # Just return the first sub-message
         return best
-
-
-class AddressList(list):
-    def contains(self, value):
-        for name, addr in self:
-            if value in name:
-                return True
-            if value in addr:
-                return True
-        return False
-
-    def icontains(self, value):
-        l = value.lower()
-        for name, addr in self:
-            if l in name.lower():
-                return True
-            if l in addr.lower():
-                return True
-        return False
 
 
 def decode_payload(msg, errors='replace'):
