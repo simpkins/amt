@@ -93,6 +93,8 @@ class Terminal:
     def getch(self, escape_time=None, handle_sig_keys=True):
         while True:
             key = self._input.getch(escape_time)
+            # In case ISIG is disabled, the caller may wish us to emulate
+            # the signal key behavior.
             if handle_sig_keys:
                 if key == keys.KEY_CTRL_Z:
                     self._restore_terminal()
@@ -196,7 +198,7 @@ class Terminal:
         if keypad is None:
             keypad = raw
         if signal_keys is None:
-            signal_keys = not raw
+            signal_keys = True
 
         attrs = orig_attrs[:]
         attrs[3] |= termios.ISIG
