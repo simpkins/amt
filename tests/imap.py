@@ -196,6 +196,7 @@ class Tests(imap_server.ImapTests):
     @classmethod
     def setUpClass(cls):
         cls.server = None
+        cls.account = None
         if hasattr(cls, 'account') and cls.account is not None:
             return
 
