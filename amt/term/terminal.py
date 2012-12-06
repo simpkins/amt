@@ -111,7 +111,7 @@ class Terminal:
                     continue
             return key
 
-    def recompute_size(self):
+    def recompute_size(self, perform_clear=True):
         self._width, self._height = self._get_dimensions()
         self._regions.recompute_sizes()
 
@@ -119,7 +119,7 @@ class Terminal:
         # it to look messed-up, since lines will wrap in unintended ways.
         # We typically need to clear the entire screen, and then let the
         # on_resize() methods redraw everything
-        if self.clear_on_resize:
+        if perform_clear and self.clear_on_resize:
             self.clear()
 
         # Call the on_resize() callback after our size and all of the
@@ -285,7 +285,7 @@ class Terminal:
             if not cursor:
                 self.write_cap('civis')
 
-            self.recompute_size()
+            self.recompute_size(perform_clear=False)
 
             root = self.region(0, -height, -width, 0)
             if root.height == self.height:
