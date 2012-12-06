@@ -9,67 +9,113 @@ import time
 
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 from amt.term import Terminal
+import amt.term.widgets as term_widgets
+import amt.term.keys as term_keys
 
 
-def draw(region):
-    term = region.term
+class CatchallDrawable(term_widgets.Drawable):
+    def _redraw(self):
+        region = self.region
 
-    # Test some simple attributes and padding
-    region.writeln(0, '{"ABCDEF":red,underline}{=:underline}one {+:blue}third'
-                   '{=weight=2}{"Right Justified":red} Text!')
-    region.writeln(1, '{+:white,bg=blue}This is {:underline} text',
-                   'some test')
-    region.writeln(2, "This is a {'long':italic} line: {:red}",
-                   '123456' * 200)
+        # Test some simple attributes and padding
+        region.writeln(0, '{"ABCDEF":red,underline}{=:underline}one '
+                       '{+:blue}third {=weight=2}'
+                       '{"Right Justified":red} Text!')
+        region.writeln(1, '{+:white,bg=blue}This is {:underline} text',
+                       'some test')
+        region.writeln(2, "This is a {'long':italic} line: {:red}",
+                       '123456' * 200)
 
-    # Test multi-cell characters
-    multicell = 'fullwidth'
-    multicell = ''.join(chr(0xfee0 + ord(c)) for c in multicell)
-    region.writeln(4, 'This line has {} characters:\t{:green}',
-                   multicell, 'abcdef' * 100)
-    # Test truncation on multicell characters.  Write two lines,
-    # where the multicell characters are off by one character on each.
-    # This way one of the lines will have to be truncated in the middle of a
-    # character.
-    region.writeln(5, 'truncate on {"fullwidth":underline}: {:cyan}',
-                   multicell * 100)
-    region.writeln(6, 'truncate on {"fullwidth2":bold}: {:cyan}',
-                   multicell * 100)
+        # Test multi-cell characters
+        multicell = 'fullwidth'
+        multicell = ''.join(chr(0xfee0 + ord(c)) for c in multicell)
+        region.writeln(4, 'This line has {} characters:\t{:green}',
+                       multicell, 'abcdef' * 100)
+        # Test truncation on multicell characters.  Write two lines,
+        # where the multicell characters are off by one character on each.
+        # This way one of the lines will have to be truncated in the middle of
+        # a character.
+        region.writeln(5, 'truncate on {"fullwidth":underline}: {:cyan}',
+                       multicell * 100)
+        region.writeln(6, 'truncate on {"fullwidth2":bold}: {:cyan}',
+                       multicell * 100)
 
-    region.writeln(8, 'writeln() will truncate after a newline\n'
-                   'this text should not appear')
+        region.writeln(8, 'writeln() will truncate after a newline\n'
+                       'this text should not appear')
 
-    for n in range(10, region.height - 2):
-        region.writeln(n, 'Line {}', n)
-    region.writeln(region.height - 1, 'Long final line: {}',
-                   'abcdef_' * 100)
+        for n in range(10, region.height - 2):
+            region.writeln(n, 'Line {}', n)
+        region.writeln(region.height - 1, 'Long final line: {}',
+                       'abcdef_' * 100)
+
+
+class HistoryDrawable(term_widgets.Drawable):
+    def __init__(self, param):
+        super().__init__(param)
+        self.history = []
+
+    def _redraw(self):
+        for n, c in enumerate(self.history):
+            self.region.writeln(n, 'Got: {!r}', c)
+
+    def append(self, entry):
+        self.history.append(entry)
+        if len(self.history) > self.region.height:
+            self.history.pop(0)
+
+        self.redraw()
+
+
+def catchall_example(root):
+    num_hist_lines = 5
+    history = HistoryDrawable(root.region(0, 0, height=num_hist_lines))
+    drawable = CatchallDrawable(root.region(20, 5))
+    drawable.redraw()
+
+    while True:
+        c = root.term.getch()
+        if c == 'q' or c == term_keys.KEY_ESCAPE:
+            return
+
+        history.append(c)
+
+
+def input_example(root):
+    history = HistoryDrawable(root)
+    history.redraw()
+    while True:
+        c = root.term.getch()
+        if c == 'q' or c == term_keys.KEY_ESCAPE:
+            return
+
+        history.append(c)
 
 
 def full_screen_example(args):
-    def on_resize():
-        term.clear()
-        draw(region)
-        term.flush()
+    examples = [
+        ('Input', input_example),
+        ('Catch-All', catchall_example),
+    ]
+    example_names = [entry[0] for entry in examples]
 
     term = Terminal()
     with term.program_mode(altscreen=args.altscreen) as root:
-        term.on_resize = on_resize
-        region = term.region(20, 5)
-        draw(region)
-        term.flush()
-
-        history = []
-        num_hist_lines = 5
-        hist_region = root.region(0, 0, height=num_hist_lines)
+        l = term_widgets.FixedListSelection(root, example_names)
+        l.redraw()
         while True:
             c = term.getch()
-            history.append(c)
-            if len(history) > num_hist_lines:
-                history.pop(0)
-
-            for n, c in enumerate(history):
-                hist_region.writeln(n, 'Got: {!r}', c)
-            term.flush()
+            if c == 'q':
+                return
+            elif c == 'j' or c == term_keys.KEY_DOWN:
+                l.move_down()
+            elif c == 'k' or c == term_keys.KEY_UP:
+                l.move_up()
+            elif c == '\n' or c == '\r':
+                l.set_visible(False)
+                term.clear()
+                example_fn = examples[l.cur_idx][1]
+                example_fn(root)
+                l.set_visible(True)
 
 
 def partial_screen_example(args):
