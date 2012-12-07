@@ -8,7 +8,7 @@ import time
 from .. import message
 
 from . import err
-from .err import ImapError, ReadInterruptedError, TimeoutError
+from .err import *
 from .conn_core import ConnectionCore
 from .constants import IMAP_PORT, IMAPS_PORT
 

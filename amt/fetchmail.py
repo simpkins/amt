@@ -169,7 +169,7 @@ class SeqIDScanner(Scanner):
                 self._run_once()
                 _log.debug('waiting for new messages...')
                 self.conn.wait_for_exists()
-            except (IOError, imap.TimeoutError) as ex:
+            except (IOError, imap.TimeoutError, imap.EOFError) as ex:
                 _log.debug('I/O error: %s', ex)
                 try:
                     self.conn.close()
