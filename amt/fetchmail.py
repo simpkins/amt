@@ -160,31 +160,55 @@ class SeqIDScanner(Scanner):
                 return
 
     def run_forever(self):
-        last_connect = time.time()
+        self.last_connect = time.time()
 
         while True:
             try:
                 self.ensure_open()
-
                 self._run_once()
+            except (IOError, imap.TimeoutError, imap.EOFError) as ex:
+                _log.debug('I/O error: %s', ex)
+                self._handle_conn_error()
+                continue
+
+            try:
                 _log.debug('waiting for new messages...')
                 self.conn.wait_for_exists()
             except (IOError, imap.TimeoutError, imap.EOFError) as ex:
+                # Expect I/O errors, timeouts, or the server closing the
+                # connection.  Just log a debug message, reconnect, and
+                # continue.
                 _log.debug('I/O error: %s', ex)
-                try:
-                    self.conn.close()
-                except:
-                    pass
-                self.conn = None
+                self._handle_conn_error()
+            except imap.ImapError as ex:
+                # This happens sometimes if the server sends back
+                # a bogus response.  For instance, Exchange sometimes
+                # returns the line "Server Unavailable."
+                # Log a warning and reconnect.
+                _log.warning('unexpected IMAP error: %s')
+                self._handle_conn_error()
+            except Exception as ex:
+                # Log all exceptions that occur.  If the error occurred
+                # while we are waiting on more responses to be available,
+                # simply log the exception and retry.
+                _log.exception('unexpected exception: %s')
+                self._handle_conn_error()
 
-                # Only reconnect once every 30 seconds,
-                # to avoid hammering the server in a loop if something
-                # is going wrong.
-                min_retry_time = last_connect + 30
-                now = time.time()
-                if now < min_retry_time:
-                    time.sleep(min_retry_time - now)
-                last_connect = time.time()
+    def _handle_conn_error(self):
+        try:
+            self.conn.close()
+        except:
+            pass
+        self.conn = None
+
+        # Only reconnect once every 30 seconds,
+        # to avoid hammering the server in a loop if something
+        # is going wrong.
+        min_retry_time = self.last_connect + 30
+        now = time.time()
+        if now < min_retry_time:
+            time.sleep(min_retry_time - now)
+        self.last_connect = time.time()
 
     def process_next_msg(self):
         assert(self.next_msg <= self.conn.mailbox.num_messages + 1)
