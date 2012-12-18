@@ -22,10 +22,11 @@ def main():
 
     args = parser.parse_args()
 
+    log_format = '%(asctime)s [%(levelname)s] %(message)s'
     if args.verbose > 1:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG, format=log_format)
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO, format=log_format)
 
     # TODO: Add a lock file, to ensure that two fetchmail instances aren't
     # running at once.
