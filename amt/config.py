@@ -45,6 +45,7 @@ def load_config(path):
     _try_load_module(amt_config, 'accounts')
     _try_load_module(amt_config, 'classify')
     _try_load_module(amt_config, 'fetchmail')
+    _try_load_module(amt_config, 'prune')
 
     return amt_config
 
@@ -139,7 +140,8 @@ class Account:
         return self._password
 
     def prepare_password(self):
-        self._password = self._password_fn(account=self)
+        if self._password is None:
+            self._password = self._password_fn(account=self)
 
 
 class LockError(Exception):
