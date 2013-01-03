@@ -7,6 +7,7 @@ import time
 
 from .. import message
 
+from . import encode
 from . import err
 from .err import *
 from .conn_core import ConnectionCore
@@ -218,8 +219,8 @@ class Connection(ConnectionCore):
         if isinstance(password, str):
             password = password.encode('ASCII')
 
-        self.run_cmd(b'LOGIN', self.to_astring(user),
-                     self.to_astring(password),
+        self.run_cmd(b'LOGIN', encode.to_astring(user),
+                     encode.to_astring(password),
                      suppress_log=True)
 
     def get_mailbox_delim(self):
@@ -311,7 +312,7 @@ class Connection(ConnectionCore):
 
     def _quote_mailbox_name(self, mailbox):
         mailbox = self._encode_mailbox_name(mailbox)
-        return self.to_astring(mailbox)
+        return encode.to_astring(mailbox)
 
     def search(self, *criteria):
         return self._run_search(b'SEARCH', criteria)
@@ -345,7 +346,7 @@ class Connection(ConnectionCore):
         if mailbox.upper() == b'INBOX':
             mailbox_arg = b'INBOX'
         else:
-            mailbox_arg = self.to_astring(mailbox)
+            mailbox_arg = encode.to_astring(mailbox)
         attr_arg = b'(' + b' '.join(attributes) + b')'
 
         with self.untagged_handler('STATUS') as status_handler:
@@ -383,7 +384,7 @@ class Connection(ConnectionCore):
         return responses[0].attributes
 
     def _run_fetch(self, cmd, msg_ids, attributes):
-        msg_ids_arg = self._format_sequence_set(msg_ids)
+        msg_ids_arg = encode.format_sequence_set(msg_ids)
 
         if isinstance(attributes, (list, tuple)):
             atts = []
@@ -426,12 +427,12 @@ class Connection(ConnectionCore):
             self.expunge()
 
     def copy(self, msg_ids, dest):
-        msg_ids_arg = self._format_sequence_set(msg_ids)
+        msg_ids_arg = encode.format_sequence_set(msg_ids)
         mbox_arg = self._quote_mailbox_name(dest)
         self.run_cmd(b'COPY', msg_ids_arg, mbox_arg)
 
     def uid_copy(self, msg_uids, dest):
-        msg_uids_arg = self._format_sequence_set(msg_uids)
+        msg_uids_arg = encode.format_sequence_set(msg_uids)
         self.run_cmd(b'UID COPY', msg_uids_arg, dest)
 
     def add_flags(self, msg_ids, flags):
@@ -473,7 +474,7 @@ class Connection(ConnectionCore):
 
         flags_arg = b''.join([b'(', b' '.join(encoded_flags), b')'])
 
-        msg_ids_arg = self._format_sequence_set(msg_ids)
+        msg_ids_arg = encode.format_sequence_set(msg_ids)
         if use_uids:
             store_cmd = b'UID STORE'
         else:
@@ -494,8 +495,8 @@ class Connection(ConnectionCore):
             flags_arg = b'(' + imap_flags_str + b')'
             args.append(flags_arg)
 
-        args.append(self.to_date_time(msg.datetime))
-        args.append(self.to_literal(msg.to_bytes()))
+        args.append(encode.to_date_time(msg.datetime))
+        args.append(encode.to_literal(msg.to_bytes()))
 
         self.run_cmd(b'APPEND', *args)
 

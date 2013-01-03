@@ -2,7 +2,6 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
-import datetime
 import errno
 import fcntl
 import logging
@@ -19,19 +18,8 @@ from .. import ssl_util
 from .err import *
 from .cmd_splitter import CommandSplitter
 from .constants import IMAP_PORT, IMAPS_PORT
-from .parse import parse_response, _MONTHS_BY_NUM
-
-
-class Literal:
-    def __init__(self, data):
-        if not isinstance(data, (bytes, bytearray)):
-            raise ImapError('literal data must be bytes')
-        self.data = data
-
-    def __str__(self):
-        # throw, to catch the error if anyone ever accidentally
-        # tries simple string conversion on a Literal object
-        raise ImapError('attempted string conversion on a Literal')
+from .parse import parse_response
+from . import encode
 
 
 class ResponseStream:
@@ -189,7 +177,7 @@ class ConnectionCore:
         cur_part = []
         for arg in args:
             cur_part.append(arg)
-            if isinstance(arg, Literal):
+            if isinstance(arg, encode.Literal):
                 parts.append(cur_part)
                 cur_part = []
         parts.append(cur_part)
@@ -431,80 +419,6 @@ class ConnectionCore:
 
     def untagged_handler(self, resp_type, callback=None):
         return ResponseHandlerCtx(self, resp_type, callback)
-
-    # TODO: Move the following functions to some encoding module
-    # They don't really belong as part of the ConnectionCore class.
-
-    def to_astring(self, value):
-        # TODO: We could just return the value itself if it doesn't contain
-        # any atom-specials.
-        return self.to_string(value)
-
-    def to_string(self, value):
-        if len(value) > 256:
-            return to_literal(value)
-
-        return self.to_quoted(value)
-
-    def to_literal(self, value):
-        return Literal(value)
-
-    def to_quoted(self, value):
-        escaped = value.replace(b'\\', b'\\\\').replace(b'"', b'\\"')
-        return b'"' + escaped + b'"'
-
-    def to_date_time(self, timestamp):
-        if not isinstance(timestamp, datetime.datetime):
-            timestamp = datetime.datetime.fromtimestamp(timestamp)
-
-        tz_offset = timestamp.utcoffset()
-        if tz_offset is None:
-            if time.daylight:
-                tz_seconds = -int(time.altzone / 60)
-            else:
-                tz_seconds = -int(time.timezone / 60)
-        else:
-            tz_seconds = tz_offset.total_seconds()
-
-        if tz_seconds < 0:
-            tz_sign = '-'
-            tz_seconds = -tz_seconds
-        else:
-            tz_sign = '+'
-        tz_hour = int(tz_seconds / 60)
-        tz_min = int(tz_seconds % 60)
-
-        month = _MONTHS_BY_NUM[timestamp.month].decode('ASCII',
-                                                       errors='strict')
-        params = (timestamp.day, month, timestamp.year,
-                  timestamp.hour, timestamp.minute, timestamp.second,
-                  tz_sign, tz_hour, tz_min)
-        s = '"%02d-%s-%04d %02d:%02d:%02d %s%02d%02d"' % params
-        return s.encode('ASCII', errors='strict')
-
-    def _format_sequence_set(self, msg_ids):
-        if isinstance(msg_ids, (list, tuple)):
-            return b','.join(self._format_seq_range(r) for r in msg_ids)
-
-        try:
-            return self._format_seq_range(msg_ids)
-        except TypeError:
-            raise TypeError('expected a numeric message ID, '
-                            'a string message range, or list of message '
-                            'IDs/ranges, got %s: %r' %
-                            (type(value).__name__, value))
-
-    def _format_seq_range(self, value):
-        if isinstance(value, int):
-            return str(value).encode('ASCII', errors='strict')
-        elif isinstance(value, str):
-            return value.encode('ASCII', errors='strict')
-        elif isinstance(value, (bytes, bytearray)):
-            return value
-
-        raise TypeError('expected a numeric message ID or a string '
-                        'message range, got %s: %r' %
-                        (type(value).__name__, value))
 
     def debug(self, msg, *args):
         if args:
