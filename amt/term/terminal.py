@@ -432,7 +432,7 @@ class Region:
             y_off = y - (self.height - 1)
             y = self.height - 1
         elif y < 0:
-            y = self.height - y
+            y = self.height + y
             if y < 0:
                 y_off = y
                 y = 0
@@ -442,7 +442,7 @@ class Region:
             x_off = x - (self.width - 1)
             x = self.width - 1
         elif x < 0:
-            x = self.width - x
+            x = self.width + x
             if x < 0:
                 x_off = x
                 x = 0
