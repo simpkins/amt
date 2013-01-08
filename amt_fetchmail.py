@@ -28,9 +28,6 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO, format=log_format)
 
-    # TODO: Add a lock file, to ensure that two fetchmail instances aren't
-    # running at once.
-
     # TODO: Put a more generic mechanism in place for showing diagnostic output
     amt.fetchmail._log.setLevel(logging.DEBUG)
 
