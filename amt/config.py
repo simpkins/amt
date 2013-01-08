@@ -30,7 +30,7 @@ def _try_load_module(config, name):
     setattr(config, name, module)
 
 
-def load_config(path):
+def load_config(path, modules=None):
     path = expand_path(path)
 
     try:
@@ -46,6 +46,10 @@ def load_config(path):
     _try_load_module(amt_config, 'classify')
     _try_load_module(amt_config, 'fetchmail')
     _try_load_module(amt_config, 'prune')
+
+    if modules is not None:
+        for mod in modules:
+            _try_load_module(amt_config, mod)
 
     return amt_config
 
