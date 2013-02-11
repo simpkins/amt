@@ -31,6 +31,8 @@ def get_password(user=None, server=None, port=None, protocol=None):
     if protocol is not None:
         cmd.extend(['--protocol', protocol])
 
+    cleanup_keyring_env()
+
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     (out, err) = p.communicate()
     code = p.returncode
@@ -43,3 +45,18 @@ def get_password(user=None, server=None, port=None, protocol=None):
     if code == os.EX_UNAVAILABLE:
         raise NoPasswordError()
     raise PasswordError(err.strip())
+
+
+def cleanup_keyring_env():
+    # I haven't investigated too thoroughly, but the ubuntu login process
+    # now seems to leave bogus info in GNOME_KEYRING_CONTROL.  (I'm guessing it
+    # starts one keyring process, whose info ends up in the environment, then
+    # later ends up killing the original process and starting a new one.)
+    #
+    # Unset GNOME_KEYRING_CONTROL if it looks like it contains bogus info.
+    keyring_path = os.environ.get('GNOME_KEYRING_CONTROL')
+    if keyring_path is None:
+        return
+
+    if not os.path.exists(keyring_path):
+        del os.environ['GNOME_KEYRING_CONTROL']
