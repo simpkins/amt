@@ -27,7 +27,7 @@ def prune(config):
     date_text = imap_encode.to_date(prune_date)
     logging.info('Pruning %s: messages before %s', config.mailbox, date_text)
 
-    with imap.login(config.account) as conn:
+    with imap.login(config.account, timeout=120) as conn:
         conn.select_mailbox(config.mailbox)
 
         uids = conn.uid_search(b'BEFORE', date_text)
