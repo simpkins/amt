@@ -31,5 +31,6 @@ setup(
         'amt_init.py',
         'amt_import.py',
         'amt_fetchmail.py',
+        'amt_ldap.py',
     ],
 )

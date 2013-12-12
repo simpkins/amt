@@ -16,9 +16,13 @@ import tempfile
 import time
 
 from . import getpassword
-from .imap.constants import IMAP_PORT, IMAPS_PORT
-from . import fetchmail
-from . import maildir
+
+IMAP_PORT = 143
+IMAPS_PORT = 993
+LDAP_PORT = 389
+LDAPS_PORT = 636
+
+DEFAULT_CFG_MODULES = ['accounts', 'classify', 'fetchmail', 'prune']
 
 
 def _try_load_module(config, name):
@@ -42,14 +46,11 @@ def load_config(path, modules=None):
     sys.modules['amt_config'] = amt_config
     amt_config.config_path = path
 
-    _try_load_module(amt_config, 'accounts')
-    _try_load_module(amt_config, 'classify')
-    _try_load_module(amt_config, 'fetchmail')
-    _try_load_module(amt_config, 'prune')
+    if modules is None:
+        modules = DEFAULT_CFG_MODULES
 
-    if modules is not None:
-        for mod in modules:
-            _try_load_module(amt_config, mod)
+    for mod in modules:
+        _try_load_module(amt_config, mod)
 
     return amt_config
 
@@ -108,6 +109,8 @@ class Account:
     SUPPORTED_PROTOCOLS = [
         ProtocolInfo('imaps', IMAPS_PORT, ssl=True),
         ProtocolInfo('imap', IMAP_PORT, ssl=False),
+        ProtocolInfo('ldaps', LDAPS_PORT, ssl=False),
+        ProtocolInfo('ldap', LDAP_PORT, ssl=True),
     ]
 
     def __init__(self, server, user,
