@@ -96,9 +96,7 @@ class Maildir:
         key, tmp_path, tmp_file = self.get_tmp_file()
         dest_path = self._get_dest_path(msg, key)
 
-        generator = email.generator.Generator(tmp_file, False)
-        generator.flatten(msg.msg, unixfrom=False)
-
+        msg.serialize_bytes(tmp_file)
         tmp_file.flush()
         os.fsync(tmp_file.fileno())
 
@@ -177,7 +175,7 @@ class Maildir:
                     raise
 
         logging.debug('new tmp file: %d --> %s', fd, path)
-        return key, path, os.fdopen(fd, 'w')
+        return key, path, os.fdopen(fd, 'wb')
 
     def get_new_key(self):
         '''

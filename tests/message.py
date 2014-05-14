@@ -36,6 +36,33 @@ Here are some contents
 
 MSG1_CRLF = MSG1.replace(b'\n', b'\r\n')
 
+MSG2 = b'''\
+Received: from mxout.example.com (unknown [1.2.3.5])	by
+ mxin.example.com with ESMTP id 1ku07ucrxm-1;	Tue, 13 May 2014
+ 15:31:33 -0700
+Received: from mx1.example.com (unknown [1.2.3.4])	by
+ mx2.example.com (Postfix) with ESMTP id 0F03037EB6;	Wed, 14 May 2014
+ 06:35:37 +0800 (CST)
+To: Bob Example <bob@example.com>
+In-Reply-To: <801B8A53A0D64D4FA6409E97BA2C7E4458450700@ABC-MBX01-5.example.com>
+Message-ID: <E9A0ABD4-8D8E-4CDD-83F8-3FA15B18AA93@example.com>
+Subject: Sample Big5 Message
+CC: Some User <user@example.com>
+From: Alice Example <alice@example.com>
+Date: Wed, 14 May 2014 06:31:30 +0800
+X-Mailer: Lotus Notes Traveler 8.5.3.3 Build 201212060844
+X-MIMETrack: =?Big5?B?U2VyaWFsaXplIGJ5IFJvdXRlciBvbiBBWElTL0FjY3RvbihSZWxlYXNl?=
+ =?Big5?B?IDguNS4zRlA0fE1hcmNoIDI3LCAyMDEzKSBhdCAyMDE0LzA1LzE0IKRXpMggMDY6?=
+ =?Big5?B?MzE6MzE=?=
+Content-Type: text/html; charset="Big5"
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+Return-Path: alice@example.com
+MIME-Version: 1.0
+
+PGh0bWw+DQp0ZXN0DQo8L2h0bWw+
+'''
+
 
 class Tests(unittest.TestCase):
     def test_parse(self):
@@ -55,3 +82,7 @@ class Tests(unittest.TestCase):
         msg1 = amt.message.Message.from_bytes(MSG1)
         out = msg1.to_bytes()
         self.assertEqual(MSG1, out)
+
+        msg2 = amt.message.Message.from_bytes(MSG2)
+        out = msg2.to_bytes()
+        self.assertEqual(MSG2, out)

@@ -21,6 +21,11 @@ import time
 # Use the new EmailPolicy rather than the python 3.2 compatible version
 class EmailPolicy(email.policy.EmailPolicy):
     def __init__(self):
+        # Note that refold_source='none' is important.
+        # The python email code has plenty of bugs in its folding
+        # implementation, and throws exceptions trying to flatten messages
+        # otherwise.  (The bugs are mostly around handling encoded words in
+        # other character sets.)
         super().__init__(refold_source='none')
 
 
@@ -178,9 +183,13 @@ class Message:
 
     def to_bytes(self):
         out_bytes = io.BytesIO()
-        gen = email.generator.BytesGenerator(out_bytes, policy=self.policy)
-        gen.flatten(self.msg)
+        self.serialize_bytes(out_bytes)
         return out_bytes.getvalue()
+
+    def serialize_bytes(self, out_io):
+        gen = email.generator.BytesGenerator(out_io, mangle_from_=False,
+                                             policy=self.policy)
+        gen.flatten(self.msg)
 
     def compute_maildir_info(self):
         '''
