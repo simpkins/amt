@@ -1,4 +1,3 @@
-#!/usr/local/src/python/cpython/python -tt
 #!/usr/bin/python3 -tt
 #
 # Copyright (c) 2012, Adam Simpkins

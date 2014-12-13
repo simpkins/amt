@@ -161,14 +161,41 @@ class SeqIDScanner(Scanner):
 
     def run_forever(self):
         self.last_connect = time.time()
+        imap_err_count = 0
 
         while True:
             try:
                 self.ensure_open()
                 self._run_once()
+                imap_err_count = 0
             except (IOError, imap.TimeoutError, imap.EOFError) as ex:
                 _log.debug('I/O error: %s', ex)
                 self._handle_conn_error()
+                continue
+            except imap.CmdError as ex:
+                # Exchange occasionally returns "NO" errors in some cases.
+                #
+                # - If another client deletes a message while we are
+                #   processing it.  We will fail trying to copy it to the
+                #   backup folder or delete it in this case.  Exchange itself
+                #   seems to auto-delete some calendar messages relatively
+                #   quickly after they arrive.
+                #
+                # - I have seen some other intermittent failures, such as
+                #   "COPY fialed or partially completed".
+                if ex.response.resp_type != b'NO':
+                    raise
+
+                # If we see too many failures in a row, give up rather than
+                # continuing to hammer the IMAP server with errors.
+                imap_err_count += 1
+                if imap_err_count > 3:
+                    raise
+
+                # For all of these cases, just close and re-open the
+                # connection.
+                delay = (imap_err_count > 1)
+                self._handle_conn_error(delay=delay)
                 continue
 
             try:
@@ -194,20 +221,21 @@ class SeqIDScanner(Scanner):
                 _log.exception('unexpected exception: %s')
                 self._handle_conn_error()
 
-    def _handle_conn_error(self):
+    def _handle_conn_error(self, delay=True):
         try:
             self.conn.close()
         except:
             pass
         self.conn = None
 
-        # Only reconnect once every 30 seconds,
-        # to avoid hammering the server in a loop if something
-        # is going wrong.
-        min_retry_time = self.last_connect + 30
-        now = time.time()
-        if now < min_retry_time:
-            time.sleep(min_retry_time - now)
+        if delay:
+            # Only reconnect once every 30 seconds,
+            # to avoid hammering the server in a loop if something
+            # is going wrong.
+            min_retry_time = self.last_connect + 30
+            now = time.time()
+            if now < min_retry_time:
+                time.sleep(min_retry_time - now)
         self.last_connect = time.time()
 
     def process_next_msg(self):
