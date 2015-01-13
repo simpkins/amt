@@ -264,6 +264,9 @@ def select_urls_term(urls, root):
         with root.term.shell_mode():
             line = input('Enter a URL Number: ')
 
+        if line == 'q':
+            return None
+
         try:
             num = int(line)
         except ValueError:
@@ -287,7 +290,10 @@ def select_urls(amt_config, urls):
         os.dup2(sys.stdout.fileno(), sys.stdin.fileno())
         term = Terminal()
         with term.program_mode() as root:
-            url = select_urls_term(urls, root)
+            try:
+                url = select_urls_term(urls, root)
+            except KeyboardInterrupt:
+                url = None
         if url is not None:
             view_url(url)
     else:
