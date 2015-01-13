@@ -125,6 +125,15 @@ def get_urls(msg):
     return get_urls_text(payload)
 
 
+def _html_text_contents(elem, results):
+    if isinstance(elem, str):
+        results.append(elem)
+        return
+
+    for child in elem.contents:
+        _html_text_contents(child, results)
+
+
 def get_urls_html(payload):
     soup = bs4.BeautifulSoup(payload)
 
@@ -133,9 +142,20 @@ def get_urls_html(payload):
         url_text = tag.get('href')
         if url_text is None:
             continue
-        value = ''.join(v for v in tag.contents if isinstance(v, str))
-        if not value:
+
+        # Join all of the text underneath this anchor to construct the label.
+        results = []
+        for elem in tag.contents:
+            _html_text_contents(elem, results)
+        if not results:
             value = None
+        else:
+            value = ' '.join(results)
+            # Truncate to 60 characters just for legibility
+            value = value[:60]
+            # Replace all non-breaking space characters with spaces.
+            value = value.replace('\N{NO-BREAK SPACE}', ' ')
+
         urls.append(URL(url_text, value))
 
     return urls
