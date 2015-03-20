@@ -691,5 +691,9 @@ def fetch_response_to_msg(response):
 
 def login(account, class_=Connection, **kwargs):
     conn = class_(account.server, account.port, ssl=account.ssl, **kwargs)
-    conn.login(account.user, account.password)
+    try:
+        conn.login(account.user, account.password)
+    except:
+        conn.close()
+        raise
     return conn

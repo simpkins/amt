@@ -101,6 +101,9 @@ class ConnectionCore:
     untagged responses.
     '''
     def __init__(self, server, port=None, timeout=60):
+        self.sock = None
+        self._interrupt_fds = None
+
         self._conn_id = get_conn_id()
 
         self._responses = []
@@ -146,7 +149,13 @@ class ConnectionCore:
         self.close()
 
     def close(self):
-        self.sock.close()
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+        if self._interrupt_fds is not None:
+            os.close(self._interrupt_fds[0])
+            os.close(self._interrupt_fds[1])
+            self._interrupt_fds = None
 
     def _on_response(self, response):
         self._responses.append(response)
