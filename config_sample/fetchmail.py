@@ -1,60 +1,95 @@
 #!/usr/bin/python3 -tt
 #
+# Sample config for amt_fetchmail
+#
 # Copyright (c) 2012, Adam Simpkins
 #
-import amt.fetchmail
+import os
+import logging
+import sys
+import traceback
+
+from amt import fetchmail
 from amt import maildir
 
-from .classifier import MailClassifier
+from . import classify
+from . import accounts
 
 
-class FetchmailConfig(amt.fetchmail.MailboxConfig):
-    def __init__(self):
+class MailProcessor(fetchmail.Processor):
+    def __init__(self, root):
         super().__init__()
-        self.server = 'imap.example.com'
-        self.user = 'johndoe@example.com'
-        self.mailbox = 'INBOX'
-        self.backup_mailbox = 'INBOX/backup'
-        self.dest_mailbox = '/home/johndoe/mail'
+        self.scanner = None
+        self.root = root
+        self._created_mailboxes = set()
 
-        self.classifier = MailClassifier()
+        inbox_path = os.path.join(self.root, 'INBOX')
+        self.inbox = maildir.Maildir(inbox_path, create=True)
 
-    def init(self):
-        self.prepare_password()
-        self.dest_maildir = maildir.Maildir(self.dest_mailbox, create=True)
+    def process_msg(self, msg):
+        logging.info('processing message from %r: %r',
+                     msg.from_addr, msg.subject)
+        # Run our classification code on the message to generate
+        # a set of tags for the message.
+        try:
+            tags = self.classify_msg(msg)
+            logging.debug('tags: %r', tags)
+        except Exception as ex:
+            sys.stderr.write('error during classification: %s\n' % (ex,))
+            traceback.print_exc()
 
-    def process_msg(self, msg, processor):
-        logging.debug('From: %s;  To: %s', msg.from_addr, msg.to)
+        # If you wanted, you could send messages to different local folders
+        # based on the classified tags.  This example just sends everything to
+        # a local inbox folder.
+        self.inbox.add(msg)
+        return True
 
-        # First copy the original unmodified message to the backup mailbox
-        # on the server.
-        processor.copy_to(self.backup_mailbox)
-
-        # Next, compute the tags for the message
-        tags = self.classifier.get_tags(msg)
-        self.apply_tags(msg, tags)
-
-        # Deliver the message to our local mailbox
-        self.deliver_local(msg)
-
-        # Delete the message from the server
-        processor.delete_msg()
-
-    def apply_tags(self, msg, tags):
-        # Delete any existing X-Label header
-        #
-        # TODO: If the message headers already contain tags,
-        # should we preserve tags not in the new set of tags?
+    def add_tag_headers(self, msg, tags):
         msg.remove_header('X-Label')
         msg.remove_header('X-Auto-Tags')
 
         # TODO: We should properly escape the tag.
         # email.utils doesn't seem to have any functions for this.
         # formataddr() doesn't do any escaping of the address.
-        value = ' '.join('<%s>' % str(tag) for tag in tags)
+        value = ' '.join('<%s>' % tag for tag in tags)
         msg.add_header('X-Label', value)
         msg.add_header('X-Auto-Tags', value)
 
-    def deliver_local(self, msg):
-        # TODO: Update a local index (such as notmuch)
-        self.dest_maildir.add(msg)
+    def classify_msg(self, msg):
+        tags = classify.classify_msg(msg)
+        self.add_tag_headers(msg, tags)
+
+        if 'alert' in tags:
+            dest = ('INBOX', 'alerts')
+            self.copy_to(dest)
+        elif 'hipri' in tags:
+            dest = ('INBOX', 'hipri')
+            self.copy_to(dest)
+
+        return tags
+
+    def copy_to(self, mailbox):
+        '''
+        Copy the message to another IMAP mailbox on the server.
+        '''
+        if mailbox not in self._created_mailboxes:
+            self.scanner.conn.ensure_mailbox(mailbox)
+            self._created_mailboxes.add(mailbox)
+        self.scanner.copy_msg(mailbox)
+
+
+def get_scanner():
+    local_mail_dir = os.path.join(os.environ['HOME'], 'Mail')
+    mail_processor = MailProcessor(local_mail_dir)
+
+    mailbox = 'INBOX'
+    backup_mailbox = ('INBOX', 'backup')
+    scanner = fetchmail.FetchAndDeleteScanner(
+        accounts.fb,
+        mailbox,
+        mail_processor,
+        backup_mbox=backup_mailbox)
+
+    mail_processor.scanner = scanner
+
+    return scanner
