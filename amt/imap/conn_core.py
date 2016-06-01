@@ -121,8 +121,6 @@ class ConnectionCore:
         # _response_code_handlers is indexed by the response code token
         self._response_code_handlers = HandlerDict()
 
-        self._init_interrupt()
-
     def _connect_sock(self, server, port, timeout, use_ssl):
         if port is None:
             if use_ssl:
@@ -142,10 +140,20 @@ class ConnectionCore:
         # the connection.
         self.sock.setblocking(False)
 
+        self._init_interrupt()
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
+        self.close()
+
+    def __del__(self):
+        # Call close() when the object is destroyed, just in case it wasn't
+        # called previously.  (It is a no-op if it was already invoked.)
+        #
+        # This makes sure we don't leak the self._interrupt_fds file
+        # descriptors.
         self.close()
 
     def close(self):
