@@ -46,7 +46,7 @@ def main():
 
     msg = load_message(args.msg_path)
     tags = classify_msg(msg)
-    for tag in tags:
+    for tag in sorted(tags):
         print(tag)
 
 
