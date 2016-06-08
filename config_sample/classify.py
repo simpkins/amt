@@ -128,7 +128,7 @@ class MessageClassifier:
                 if self.msg.get('X-Differential-Author') == MY_PHID:
                     self.add_tag('diff-author')
                 else:
-                    reviewers = self.msg.get_all('X-Differential-Reviewer', ())
+                    reviewers = self.msg.get_all('X-Differential-Reviewer')
                     if MY_PHID in reviewers:
                         self.add_tag('diff-reviewer')
 

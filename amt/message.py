@@ -29,6 +29,9 @@ class EmailPolicy(email.policy.EmailPolicy):
         super().__init__(refold_source='none')
 
 
+_NO_PARAM = object()
+
+
 class Message:
     '''
     Represents an email message.
@@ -244,12 +247,13 @@ class Message:
         '''
         return self.get_header(name)
 
-    def get_header_all(self, name, default=None):
+    def get_header_all(self, name, default=_NO_PARAM):
         '''
         Return a list of all headers with the specified name.
 
         Returns a list of email.header.Header objects, or the specified default
-        if no header exists with this name.
+        if no header exists with this name.  If no default value is specified,
+        returns an empty list.
         '''
         results = []
         name = name.lower()
@@ -259,18 +263,27 @@ class Message:
                 results.append(value)
 
         if not results:
+            if default is _NO_PARAM:
+                return []
             return default
         return results
 
-    def get_all(self, name, default=None):
+    def get_all(self, name, default=_NO_PARAM):
         '''
         Return a list of all headers with the specified name.
 
         Returns a list of strings, or the specified default if no header exists
-        with this name.
+        with this name.  If no default value is specified, returns an empty
+        list.
         '''
         hdrs = self.get_header_all(name, None)
         if hdrs is None:
+            # Use a special value to indicate if the caller didn't specify
+            # a default argument, and return a new empty list in this case.
+            # (We don't want to use [] as a default argument, since it is
+            # mutable.)
+            if default is _NO_PARAM:
+                return []
             return default
         return [str(hdr) for hdr in hdrs]
 
@@ -279,7 +292,7 @@ class Message:
         Get all instances of the specified header, parse them as addresses, and
         return them as an AddressList.
         '''
-        values = self.get_all(header, [])
+        values = self.get_all(header)
 
         # The new email.policy code is rather awkward to use
         # if you want to instantiate specific header types on your own
@@ -337,14 +350,14 @@ class Message:
 
         # For some useful info about the References and In-Reply-To headers
         # in practice, see http://www.jwz.org/doc/threading.html
-        for references in self.get_all('References', []):
+        for references in self.get_all('References'):
             parts = references.split()
             for part in parts:
                 if _is_valid_message_id(part):
                     results.append(part)
 
         global _message_id_regex
-        for header in self.get_all('In-Reply-To', []):
+        for header in self.get_all('In-Reply-To'):
             # Search for something that looks like <ID@HOST>
             m = _message_id_regex.search(header)
             if not m:
