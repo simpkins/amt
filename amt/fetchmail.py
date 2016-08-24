@@ -169,21 +169,11 @@ class SeqIDScanner(Scanner):
                 self._run_once()
                 imap_err_count = 0
             except (IOError, imap.TimeoutError, imap.EOFError) as ex:
-                _log.debug('I/O error: %s', ex)
+                _log.exception('I/O error: %s', ex)
                 self._handle_conn_error()
                 continue
             except imap.CmdError as ex:
-                # Exchange occasionally returns "NO" errors in some cases.
-                #
-                # - If another client deletes a message while we are
-                #   processing it.  We will fail trying to copy it to the
-                #   backup folder or delete it in this case.  Exchange itself
-                #   seems to auto-delete some calendar messages relatively
-                #   quickly after they arrive.
-                #
-                # - I have seen some other intermittent failures, such as
-                #   "COPY fialed or partially completed".
-                if ex.response.resp_type != b'NO':
+                if self._is_fatal_error(ex):
                     raise
 
                 # If we see too many failures in a row, give up rather than
@@ -203,9 +193,8 @@ class SeqIDScanner(Scanner):
                 self.conn.wait_for_exists()
             except (IOError, imap.TimeoutError, imap.EOFError) as ex:
                 # Expect I/O errors, timeouts, or the server closing the
-                # connection.  Just log a debug message, reconnect, and
-                # continue.
-                _log.debug('I/O error: %s', ex)
+                # connection.  Just log a message, reconnect, and continue.
+                _log.exception('I/O error: %s', ex)
                 self._handle_conn_error()
             except imap.ImapError as ex:
                 # This happens sometimes if the server sends back
@@ -220,6 +209,35 @@ class SeqIDScanner(Scanner):
                 # simply log the exception and retry.
                 _log.exception('unexpected exception: %s')
                 self._handle_conn_error()
+
+    def _is_fatal_error(self, ex):
+        # Exchange occasionally returns "NO" errors in some cases.
+        #
+        # - If another client deletes a message while we are
+        #   processing it.  We will fail trying to copy it to the
+        #   backup folder or delete it in this case.  Exchange itself
+        #   seems to auto-delete some calendar messages relatively
+        #   quickly after they arrive.
+        #
+        # - I have seen some other intermittent failures, such as
+        #   "COPY failed or partially completed".
+        if ex.response.resp_type == b'NO':
+            return False
+
+        # I have also seen exchange return
+        # ("BAD", "User is authenticated but not connected.")
+        # when trying to select the mailbox.  It sounds like if the
+        # Exchange server has auth issues sometimes it can return
+        # successfully for the login command but then return this BAD
+        # error when we actually try to select the mailbox.
+        #
+        # Treat this as non-fatal.  We'll tear down and re-create the
+        # connection, and try logging in a second time.
+        if (ex.response.resp_type == b'BAD' and
+              ex.response.text == b'User is authenticated but not connected.'):
+            return False
+
+        return True
 
     def _handle_conn_error(self, delay=True):
         try:
