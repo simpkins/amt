@@ -135,7 +135,7 @@ def _html_text_contents(elem, results):
 
 
 def get_urls_html(payload):
-    soup = bs4.BeautifulSoup(payload)
+    soup = bs4.BeautifulSoup(payload, 'lxml')
 
     urls = []
     for tag in soup.find_all('a'):
