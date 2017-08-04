@@ -1,4 +1,4 @@
-#!/usr/bin/python -tt
+#!/usr/bin/python3 -tt
 #
 # Copyright (c) 2013, Adam Simpkins
 #
@@ -19,10 +19,11 @@ MUTT_ATTRS = ['displayName', 'mail', 'title']
 
 def print_mutt_results(results):
     print('%d entries found' % (len(results,)))
-    for (dn, entry) in results:
-        if not entry['mail'] or not entry['displayName']:
+    for entry in results:
+        if (not getattr(entry, 'mail', None) or
+                not getattr(entry, 'displayName', None)):
             continue
-        if entry.has_key('title') and entry['title']:
+        if 'title' in entry and entry['title']:
             desc = entry['title'][0]
         else:
             desc = ''
@@ -30,10 +31,11 @@ def print_mutt_results(results):
 
 
 def print_results(results):
-    for (dn, entry) in results:
-        print(dn)
-        for key, value in entry.iteritems():
-            print('  %s: %s' % (key, value))
+    for entry in results:
+        print(entry.entry_get_dn())
+        for key, values in sorted(entry.entry_get_attributes_dict().items()):
+            for value in values:
+                print('  %s: %s' % (key, value))
 
 
 def parse_filter(parser, args):
