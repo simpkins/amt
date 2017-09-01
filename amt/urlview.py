@@ -58,12 +58,15 @@ class URL:
         return self.raw_url
 
     def demangle(self, url_obj):
-        # Strip Facebook notification link shims
         if url_obj.netloc == 'www.facebook.com':
+            # Strip Facebook notification link shims
             if url_obj.path == '/n/':
                 return self.demangle_fb_notification_shim(url_obj)
             elif url_obj.path.startswith('/l/'):
                 return self.demangle_fb_link_shim(url_obj)
+        elif url_obj.netloc == 'urldefense.proofpoint.com':
+            # Decode proofpoint URL defense URLS.
+            return self.demangle_proofpoint_urldefense(url_obj)
         return url_obj
 
     def demangle_fb_notification_shim(self, url_obj):
@@ -116,6 +119,16 @@ class URL:
                                             '', url_obj.query,
                                             url_obj.fragment)
         return next_url
+
+    def demangle_proofpoint_urldefense(self, url_obj):
+        query = urllib.parse.parse_qs(url_obj.query)
+        u_param = query.get('u')
+        if not u_param:
+            return url_obj
+
+        translated = u_param[0].translate(str.maketrans("-_", '%/'))
+        next_url_str = urllib.parse.unquote(translated)
+        return urllib.parse.urlparse(next_url_str)
 
 
 def get_urls(msg):
