@@ -209,9 +209,12 @@ def extract_urls(amt_config, msg):
         return extract_urls_generic(msg)
 
 
-def view_url(url):
-    cmd = ['x-www-browser', url.effective_url]
-    subprocess.check_call(cmd)
+def view_url(amt_config, url):
+    if hasattr(amt_config.urlview, 'view_url'):
+        amt_config.urlview.view_url(url)
+    else:
+        cmd = ['x-www-browser', url.effective_url]
+        subprocess.check_call(cmd)
 
 
 def guess_best_url(amt_config, msg):
@@ -231,7 +234,7 @@ def guess_best_url(amt_config, msg):
             select_urls(amt_config, urls)
             return
 
-    view_url(best_url)
+    view_url(amt_config, best_url)
 
 
 def select_urls_term(urls, root):
@@ -308,6 +311,6 @@ def select_urls(amt_config, urls):
             except KeyboardInterrupt:
                 url = None
         if url is not None:
-            view_url(url)
+            view_url(amt_config, url)
     else:
         print_urls(urls)
