@@ -12,9 +12,27 @@ import sys
 import amt.config
 import amt.ldap
 
-DEFAULT_ATTRS = ['cn', 'userPrincipalName', 'mail', 'mailNickname',
-                 'displayName', 'givenName', 'sn']
-MUTT_ATTRS = ['displayName', 'mail', 'title']
+DEFAULT_ATTRS = [
+    'cn',
+    'userPrincipalName',
+    'mail',
+    'mailNickname',
+    'displayName',
+    'givenName',
+    'sn',
+    'uid',
+]
+MUTT_ATTRS = [
+    # The following fields are used for display purposes
+    'displayName',
+    'mail',
+    'title',
+    # The following fields are used for sorting
+    'uid',
+    'mailNickname',
+    'sn',
+    'givenName',
+]
 
 
 def print_mutt_results(results):
@@ -38,11 +56,43 @@ def print_results(results):
                 print('  %s: %s' % (key, value))
 
 
+def _get_sort_name(entry):
+    for attr_name in ('displayName', 'name'):
+        try:
+            attr = entry[attr_name]
+            return str(attr)
+        except KeyError:
+            continue
+
+    return entry.entry_dn
+
+
+def _get_match_score(entry, lower_names):
+    fields = [
+        ('uid', 100),
+        ('mailNickname', 90),
+        ('sn', 80),
+        ('givenName', 70),
+    ]
+    for field_name, field_score in fields:
+        try:
+            attr = entry[field_name]
+        except KeyError:
+            continue
+
+        found = False
+        for value in attr.values:
+            if value.lower() in lower_names:
+                return field_score
+
+    return 0
+
+
 def parse_filter(parser, args):
     if not args.user:
         if args.filter is None:
             parser.error('No users specified, and no --filter specified')
-        return args.filter
+        return args.filter, _get_sort_name
 
     user_filter_string = ('(cn=*{0}*) (uid=*{0}*) '
                             '(proxyAddresses=*{0}*) (userPrincipalName=*{0}*)')
@@ -52,7 +102,17 @@ def parse_filter(parser, args):
     for user in args.user:
         user_filters.append(user_filter_string.format(user))
 
-    return '(|{0})'.format(' '.join(user_filters))
+    lower_names = set(user.lower() for user in args.user)
+
+    def name_sort_key(entry):
+        score = _get_match_score(entry, lower_names)
+        sort_name = _get_sort_name(entry)
+        # Negate the score so that high scores are shown first.
+        # Sort by the sort_name when entries have equal scores.
+        return (-score, sort_name)
+
+    filter = '(|{0})'.format(' '.join(user_filters))
+    return filter, name_sort_key
 
 
 def parse_attrs(parser, args, ldap_cfg):
@@ -106,7 +166,7 @@ def main():
 
     if args.base_dn is None:
         args.base_dn = amt_config.ldap.base_dn
-    ldap_filter = parse_filter(parser, args)
+    ldap_filter, sort_key = parse_filter(parser, args)
     ldap_attrs = parse_attrs(parser, args, amt_config.ldap)
 
     account.prepare_password()
@@ -114,6 +174,7 @@ def main():
     results = conn.search(base_dn=args.base_dn,
                           filter=ldap_filter,
                           attrs=ldap_attrs)
+    results.sort(key=sort_key)
 
     if args.mutt:
         print_mutt_results(results)
