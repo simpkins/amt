@@ -36,6 +36,8 @@ class Connection(object):
             raise Exception(self.conn.last_error)
 
     def search(self, base_dn, filter, attrs=None, scope='SUBTREE'):
+        if attrs is None:
+            attrs = ldap3.ALL_ATTRIBUTES
         result = self.conn.search(base_dn, filter, scope, attributes=attrs)
         if not result:
             raise Exception(self.conn.last_error)

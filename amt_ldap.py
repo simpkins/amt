@@ -32,8 +32,8 @@ def print_mutt_results(results):
 
 def print_results(results):
     for entry in results:
-        print(entry.entry_get_dn())
-        for key, values in sorted(entry.entry_get_attributes_dict().items()):
+        print(entry.entry_dn)
+        for key, values in sorted(entry.entry_attributes_as_dict.items()):
             for value in values:
                 print('  %s: %s' % (key, value))
 
@@ -44,7 +44,7 @@ def parse_filter(parser, args):
             parser.error('No users specified, and no --filter specified')
         return args.filter
 
-    user_filter_string = ('(cn=*{0}*) (rdn=*{0}*) (uid=*{0}*) '
+    user_filter_string = ('(cn=*{0}*) (uid=*{0}*) '
                             '(proxyAddresses=*{0}*) (userPrincipalName=*{0}*)')
     user_filters = []
     if args.filter is not None:
