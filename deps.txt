@@ -1,0 +1,4 @@
+Package Requirements on Ubuntu:
+- python3-secretstorage
+- python3-ldap3
+- python-beautifulsoup
