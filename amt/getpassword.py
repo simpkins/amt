@@ -2,13 +2,7 @@
 #
 # Copyright (c) 2011, Adam Simpkins
 #
-import subprocess
-import os
-
-# The gnomekeyring module is only available for python 2.x
-# Run a helper python 2.x program to get the password
-HELPER_EXE = os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                          'libexec', 'getpassword.py'))
+import secretstorage
 
 
 class PasswordError(Exception):
@@ -21,42 +15,67 @@ class NoPasswordError(PasswordError):
 
 
 def get_password(user=None, server=None, port=None, protocol=None):
-    cmd = [HELPER_EXE]
+    attributes = {}
     if user is not None:
-        cmd.extend(['--user', user])
+        attributes['user'] = user
     if server is not None:
-        cmd.extend(['--server', server])
+        attributes['server'] = server
     if port is not None:
-        cmd.extend(['--port', str(port)])
+        attributes['port'] = str(port)
     if protocol is not None:
-        cmd.extend(['--protocol', protocol])
+        attributes['protocol'] = protocol
 
-    cleanup_keyring_env()
-
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    (out, err) = p.communicate()
-    code = p.returncode
-
-    if code == os.EX_OK:
-        if not out.endswith(b'\n'):
-            raise PasswordError('expected output to end in a newline')
-        return out[:-1].decode()
-
-    if code == os.EX_UNAVAILABLE:
+    dbus = secretstorage.dbus_init()
+    collection = secretstorage.get_default_collection(dbus)
+    items = list(collection.search_items(attributes))
+    if not items:
         raise NoPasswordError()
-    raise PasswordError(err.strip())
+
+    if len(items) > 1:
+        raise PasswordError(
+            "found multiple password entries matching the criteria"
+        )
+
+    secret = items[0].get_secret()
+    return secret.decode('utf-8')
 
 
-def cleanup_keyring_env():
-    # I haven't investigated too thoroughly, but the ubuntu login process
-    # now seems to leave bogus info in GNOME_KEYRING_CONTROL.  (I'm guessing it
-    # starts one keyring process, whose info ends up in the environment, then
-    # later ends up killing the original process and starting a new one.)
-    #
-    # Unset GNOME_KEYRING_CONTROL if it looks like it contains bogus info.
-    keyring_path = os.environ.get('GNOME_KEYRING_CONTROL')
-    if keyring_path is None:
-        return
+# Main function just to help test the code above
+if __name__ == '__main__':
+    import argparse
+    import os
+    import sys
 
-    if not os.path.exists(keyring_path):
-        del os.environ['GNOME_KEYRING_CONTROL']
+    ap = argparse.ArgumentParser()
+    ap.add_argument('-u', '--user',
+                    action='store',
+                    help='The username')
+    ap.add_argument('-s', '--server',
+                    action='store',
+                    help='The server')
+    ap.add_argument('-p', '--port',
+                    action='store', type=int,
+                    help='The port number')
+    ap.add_argument('-P', '--proto', '--protocol',
+                    action='store', dest='protocol',
+                    help='The port number')
+    args = ap.parse_args()
+
+    params = ('user', 'server', 'port', 'protocol')
+    kwargs = {}
+    for p in params:
+        value = getattr(args, p)
+        if value is not None:
+            kwargs[p] = value
+
+    try:
+        pw = get_password(**kwargs)
+    except NoPasswordError as ex:
+        print("error: no matching password found", file=sys.stderr)
+        sys.exit(os.EX_UNAVAILABLE)
+    except PasswordError as ex:
+        print(f"error: {ex}", file=sys.stderr)
+        sys.exit(os.EX_DATAERR)
+
+    print(pw)
+    sys.exit(os.EX_OK)
