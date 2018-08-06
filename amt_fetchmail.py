@@ -34,9 +34,12 @@ def main():
     scanner = amt_config.fetchmail.get_scanner()
 
     lock_path = os.path.join(amt_config.config_path, 'fetchmail.lock')
-    with amt.config.LockFile(lock_path):
-        scanner.account.prepare_password()
-        scanner.run_forever()
+    try:
+        with amt.config.LockFile(lock_path):
+            scanner.account.prepare_password()
+            scanner.run_forever()
+    except KeyboardInterrupt:
+        logging.info('Interrupted')
 
 
 if __name__ == '__main__':
