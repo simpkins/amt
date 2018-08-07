@@ -89,10 +89,7 @@ class _Pruner(object):
 
                 ranges = imap_encode.collapse_seq_ranges(now)
                 logging.info(f'Deleting {ranges.decode("utf-8")}...')
-                conn.uid_delete_msg(ranges)
-
-                logging.debug('Expunging messages...')
-                conn.expunge(timeout=300)
+                conn.uid_delete_msg(ranges, expunge_now=True)
 
                 self.uids = remaining_uids
 

@@ -416,15 +416,18 @@ class Connection(ConnectionCore):
         attrs = self.uid_fetch_one(msg_id, desired_attrs)
         return fetch_response_to_msg(attrs)
 
-    def delete_msg(self, msg_ids, expunge_now=False):
-        self.add_flags(msg_ids, [FLAG_DELETED])
+    def delete_msg(self, msg_ids, expunge_now=False, timeout=None):
+        self.add_flags(msg_ids, [FLAG_DELETED], timeout=timeout)
         if expunge_now:
-            self.expunge()
+            self.expunge(timeout=timeout)
 
-    def uid_delete_msg(self, msg_ids, expunge_now=False):
-        self.uid_add_flags(msg_ids, [FLAG_DELETED])
+    def uid_delete_msg(self, msg_ids, expunge_now=False, timeout=None):
+        self.uid_add_flags(msg_ids, [FLAG_DELETED], timeout=timeout)
         if expunge_now:
-            self.expunge()
+            if b'UIDPLUS' in self.get_capabilities():
+                self._uid_expunge(msg_ids, timeout=timeout)
+            else:
+                self.expunge(timeout=timeout)
 
     def copy(self, msg_ids, dest):
         msg_ids_arg = encode.format_sequence_set(msg_ids)
@@ -435,35 +438,40 @@ class Connection(ConnectionCore):
         msg_uids_arg = encode.format_sequence_set(msg_uids)
         self.run_cmd(b'UID COPY', msg_uids_arg, dest)
 
-    def add_flags(self, msg_ids, flags):
+    def add_flags(self, msg_ids, flags, timeout=None):
         '''
         Add the specified flags to the specified message(s)
         '''
-        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=False,
+                           timeout=timeout)
 
-    def uid_add_flags(self, msg_ids, flags):
-        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=True)
+    def uid_add_flags(self, msg_ids, flags, timeout=None):
+        self._update_flags(b'+FLAGS.SILENT', msg_ids, flags, use_uids=True,
+                           timeout=timeout)
 
-    def remove_flags(self, msg_ids, flags):
+    def remove_flags(self, msg_ids, flags, timeout=None):
         '''
         Remove the specified flags from the specified message(s)
         '''
-        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=False,
+                           timeout=timeout)
 
-    def uid_remove_flags(self, msg_ids, flags):
-        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=True)
+    def uid_remove_flags(self, msg_ids, flags, timeout=None):
+        self._update_flags(b'-FLAGS.SILENT', msg_ids, flags, use_uids=True,
+                           timeout=timeout)
 
-    def replace_flags(self, msg_ids, flags):
+    def replace_flags(self, msg_ids, flags, timeout=None):
         '''
         Replace the flags on the specified message(s) with the new list of
         flags.
         '''
-        self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=False)
+        self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=False,
+                           timeout=timeout)
 
-    def uid_replace_flags(self, msg_ids, flags):
+    def uid_replace_flags(self, msg_ids, flags, timeout=None):
         self._update_flags(b'FLAGS.SILENT', msg_ids, flags, use_uids=True)
 
-    def _update_flags(self, cmd, msg_ids, flags, use_uids=True):
+    def _update_flags(self, cmd, msg_ids, flags, use_uids=True, timeout=None):
         if isinstance(flags, (str, bytes, bytearray)):
             flags = [flags]
         encoded_flags = []
@@ -480,10 +488,15 @@ class Connection(ConnectionCore):
         else:
             store_cmd = b'STORE'
 
-        self.run_cmd(store_cmd, msg_ids_arg, cmd, flags_arg)
+        self.run_cmd(store_cmd, msg_ids_arg, cmd, flags_arg, timeout=timeout)
 
     def expunge(self, timeout=None):
         self.run_cmd(b'EXPUNGE', timeout=timeout)
+
+    def _uid_expunge(self, msg_ids, timeout=None):
+        assert b'UIDPLUS' in self.get_capabilities()
+        msg_ids_arg = encode.format_sequence_set(msg_ids)
+        self.run_cmd(b'UID EXPUNGE', msg_ids_arg, timeout=timeout)
 
     def append_msg(self, mailbox, msg):
         args = []
