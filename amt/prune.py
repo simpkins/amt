@@ -78,19 +78,27 @@ class _Pruner(object):
             self.retry_count = 0
             self.retry_limit = 3
 
-            # MS Exchange seems to have some limit on how many messages can be
-            # updated at once.  (It returns "BAD Command Error. 10" if a STORE
-            # command has too many message IDs.)  Break down the requests into
-            # smaller chunks of UIDs to avoid hitting this limit.
-            chunk_size = 256
+            # Older versions of MS Exchange seem to have a limit on how many
+            # messages can be updated at once.  (It would return
+            # "BAD Command Error. 10" if a STORE command has too many message
+            # IDs.)
+            #
+            # chunk_size can be set to an integer to allow perform the
+            # deletions in chunks to avoid hitting this limit.
+            # chunk_size = 256
+            chunk_size = None
+
             while self.uids:
-                now = self.uids[:chunk_size]
-                remaining_uids = self.uids[chunk_size:]
+                if chunk_size is not None:
+                    now = self.uids[:chunk_size]
+                    remaining_uids = self.uids[chunk_size:]
+                else:
+                    now = self.uids
+                    remaining_uids = []
 
                 ranges = imap_encode.collapse_seq_ranges(now)
                 logging.info(f'Deleting {ranges.decode("utf-8")}...')
-                conn.uid_delete_msg(ranges, expunge_now=True)
-
+                conn.uid_delete_msg(ranges, expunge_now=True, timeout=300)
                 self.uids = remaining_uids
 
 
