@@ -482,8 +482,8 @@ class Connection(ConnectionCore):
 
         self.run_cmd(store_cmd, msg_ids_arg, cmd, flags_arg)
 
-    def expunge(self):
-        self.run_cmd(b'EXPUNGE')
+    def expunge(self, timeout=None):
+        self.run_cmd(b'EXPUNGE', timeout=timeout)
 
     def append_msg(self, mailbox, msg):
         args = []

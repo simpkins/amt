@@ -92,7 +92,7 @@ class _Pruner(object):
                 conn.uid_delete_msg(ranges)
 
                 logging.debug('Expunging messages...')
-                conn.expunge()
+                conn.expunge(timeout=300)
 
                 self.uids = remaining_uids
 

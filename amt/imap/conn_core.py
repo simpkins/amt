@@ -173,9 +173,9 @@ class ConnectionCore:
         self._next_tag += 1
         return tag
 
-    def run_cmd(self, command, *args, suppress_log=False):
+    def run_cmd(self, command, *args, suppress_log=False, timeout=None):
         tag = self.send_request(command, *args, suppress_log=suppress_log)
-        self.wait_for_response(tag)
+        self.wait_for_response(tag, timeout=timeout)
 
     def has_nonsynch_literals(self):
         # has_nonsynch_literals() should normally be overridden by
