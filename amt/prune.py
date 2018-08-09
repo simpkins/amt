@@ -37,6 +37,7 @@ class _Pruner(object):
         while True:
             try:
                 self.try_prune()
+                return
             except imap.TimeoutError:
                 self.retry_count += 1
                 if self.retry_count < self.retry_limit:
@@ -98,8 +99,10 @@ class _Pruner(object):
 
                 ranges = imap_encode.collapse_seq_ranges(now)
                 logging.info(f'Deleting {ranges.decode("utf-8")}...')
-                conn.uid_delete_msg(ranges, expunge_now=True, timeout=300)
+                conn.uid_delete_msg(ranges, timeout=600)
                 self.uids = remaining_uids
+
+            conn.close_mailbox(timeout=900)
 
 
 def prune(config):

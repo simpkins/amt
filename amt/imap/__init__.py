@@ -264,11 +264,11 @@ class Connection(ConnectionCore):
 
         return self.mailbox
 
-    def close_mailbox(self):
+    def close_mailbox(self, timeout=None):
         if self.mailbox is None:
             raise ImapError('no mailbox open')
 
-        self.run_cmd(b'CLOSE')
+        self.run_cmd(b'CLOSE', timeout=timeout)
         self.mailbox.unregister_handlers()
         self.mailbox = None
 
@@ -422,7 +422,15 @@ class Connection(ConnectionCore):
             self.expunge(timeout=timeout)
 
     def uid_delete_msg(self, msg_ids, expunge_now=False, timeout=None):
-        self.uid_add_flags(msg_ids, [FLAG_DELETED], timeout=timeout)
+        try:
+            self.uid_add_flags(msg_ids, [FLAG_DELETED], timeout=timeout)
+        except CmdError as ex:
+            ignored_errors = [
+                (b'NO', b'Some of the requested messages no longer exist.'),
+            ]
+            if (ex.response.resp_type, ex.response.text) in ignored_errors:
+                pass
+
         if expunge_now:
             if b'UIDPLUS' in self.get_capabilities():
                 self._uid_expunge(msg_ids, timeout=timeout)
