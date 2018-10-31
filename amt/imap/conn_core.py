@@ -100,7 +100,7 @@ class ConnectionCore:
     Supports sending requests, receiving responses, and managing handlers for
     untagged responses.
     '''
-    def __init__(self, server, port=None, timeout=60):
+    def __init__(self, server, port=None, timeout=None):
         self.sock = None
         self._interrupt_fds = None
 
@@ -108,8 +108,9 @@ class ConnectionCore:
 
         self._responses = []
         self._parser = ResponseStream(self._on_response, self._conn_id)
-        self.default_response_timeout = timeout
-        self.default_send_timeout = timeout
+        self.default_response_timeout = timeout or 300
+        self.response_progress_timeout = 60
+        self.default_send_timeout = timeout or 60
 
         tag_prefix = ''.join(random.sample('ABCDEFGHIJKLMNOP', 4))
         self._tag_prefix = bytes(tag_prefix, 'ASCII')
@@ -267,10 +268,11 @@ class ConnectionCore:
         # still be able to re-use the socket after a timeout.  (We can
         # correctly resume even if a timeout occurs partway through a
         # response.)
+        recv_buf_size = 64 * 1024
         while not self._responses:
             self._wait_for_recv_ready(end_time)
             try:
-                data = self.sock.recv(4096)
+                data = self.sock.recv(recv_buf_size)
             except ssl.SSLWantReadError as ex:
                 continue
             except socket.error as ex:
@@ -291,10 +293,20 @@ class ConnectionCore:
         if hasattr(self.sock, 'pending') and self.sock.pending():
             return
 
+        # The end_time argument specifies how long we will wait for the entire
+        # response.  This may be a very large timeout to accommodate slowly
+        # downloading large messages.
+        #
+        # We also add a shorter timeout on how long we will wait to make
+        # forward progress.  This prevents us from waiting for the full
+        # response timeout if we stop receiving data entirely.
+        progress_end_time = time.time() + self.response_progress_timeout
+        poll_end_time = max(progress_end_time, end_time)
+
         # No data buffered ready to process, we have to wait for the socket
         # to become readable.
-        self._wait_for_sock_ready(select.POLLIN | select.POLLPRI, end_time,
-                                  'socket to become readable')
+        self._wait_for_sock_ready(select.POLLIN | select.POLLPRI,
+                                  poll_end_time, 'socket to become readable')
 
     def _wait_for_send_ready(self, end_time):
         self._wait_for_sock_ready(select.POLLOUT, end_time,
