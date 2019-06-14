@@ -22,18 +22,12 @@ class URL:
         self.raw_url = url
         self.url_obj = urllib.parse.urlparse(self.raw_url)
         self.label = label
-
-        demangled_url = self.demangle(self.url_obj)
-        if isinstance(demangled_url, str):
-            self._display_url = demangled_url
-        else:
-            self._display_url = urllib.parse.urlunparse(demangled_url)
+        self._display_url = None
 
     def __str__(self):
         return self.raw_url
 
-    @property
-    def display_url(self):
+    def get_display_url(self, amt_config):
         '''
         A string to use to display the URL to the user.
 
@@ -41,7 +35,20 @@ class URL:
         For example, converting Facebook linkshim URLs to the destination URL
         without the facebook.com prefix.
         '''
+        # We currently cache the computed display URL.
+        # We assume we are always called with the same amt_config, so we don't
+        # bother ever checking to see if this needs to be recomputed.
+        if self._display_url is None:
+            self._display_url = self._compute_display_url(amt_config)
+
         return self._display_url
+
+    def _compute_display_url(self, amt_config):
+        demangled_url = self.demangle(amt_config, self.url_obj)
+        if isinstance(demangled_url, str):
+            return demangled_url
+        else:
+            return urllib.parse.urlunparse(demangled_url)
 
     @property
     def effective_url(self):
@@ -57,7 +64,14 @@ class URL:
         # de-link-shimming the same way that FB would.
         return self.raw_url
 
-    def demangle(self, url_obj):
+    def demangle(self, amt_config, url_obj):
+        while True:
+            next_url = self._demangle_one_url(amt_config, url_obj)
+            if next_url is None:
+                return url_obj
+            url_obj = next_url
+
+    def _demangle_one_url(self, amt_config, url_obj):
         if url_obj.netloc == 'www.facebook.com':
             # Strip Facebook notification link shims
             if url_obj.path == '/n/':
@@ -67,7 +81,9 @@ class URL:
         elif url_obj.netloc == 'urldefense.proofpoint.com':
             # Decode proofpoint URL defense URLS.
             return self.demangle_proofpoint_urldefense(url_obj)
-        return url_obj
+        elif hasattr(amt_config.urlview, 'demangle_url'):
+            return amt_config.urlview.demangle_url(url_obj)
+        return None
 
     def demangle_fb_notification_shim(self, url_obj):
         qparams = urllib.parse.parse_qsl(url_obj.query,
@@ -75,12 +91,12 @@ class URL:
         if not qparams:
             # invalid, or old style link shim
             # Just use the raw URL.
-            return url_obj
+            return None
         (next_path, empty) = qparams[0]
         if empty != '':
             # invalid, or old style link shim
             # Just use the raw URL.
-            return url_obj
+            return None
         if not next_path.startswith('/'):
             next_path = '/' + next_path
 
@@ -96,17 +112,13 @@ class URL:
         next_url = urllib.parse.ParseResult(url_obj.scheme, url_obj.netloc,
                                             next_path, url_obj.params,
                                             next_query, next_fragment)
-
-        # Recursively demangle the next URL.
-        # Notification URLs are frequently links to the www.facebook.com/l/
-        # linkshim endpoint.
-        return self.demangle(next_url)
+        return next_url
 
     def demangle_fb_link_shim(self, url_obj):
         r = re.compile('^/l/([a-zA-Z0-9\_\-\.]*)(?:;|/)(?P<url>.*)')
         m = r.match(url_obj.path)
         if not m:
-            return url_obj
+            return None
 
         parts = m.group('url').split('/', 1)
         next_netloc = parts[0]
@@ -124,7 +136,7 @@ class URL:
         query = urllib.parse.parse_qs(url_obj.query)
         u_param = query.get('u')
         if not u_param:
-            return url_obj
+            return None
 
         translated = u_param[0].translate(str.maketrans("-_", '%/'))
         next_url_str = urllib.parse.unquote(translated)
@@ -191,15 +203,16 @@ def extract_urls_generic(msg):
     return urls
 
 
-def print_urls(urls):
+def print_urls(amt_config, urls):
     num_field_width = len('%d: ' % len(urls))
 
     for n, url in enumerate(urls):
+        display_url = url.get_display_url(amt_config)
         if url.label:
             print('%*d: %s' % (num_field_width, n, url.label))
-            print('%s  %s' % (' ' * num_field_width, url.display_url))
+            print('%s  %s' % (' ' * num_field_width, display_url))
         else:
-            print('%*d: %s' % (num_field_width, n, url.display_url))
+            print('%*d: %s' % (num_field_width, n, display_url))
 
 
 def extract_urls(amt_config, msg):
@@ -237,7 +250,7 @@ def guess_best_url(amt_config, msg):
     view_url(amt_config, best_url)
 
 
-def select_urls_term(urls, root):
+def select_urls_term(amt_config, urls, root):
     if not urls:
         root.writeln(-1, 'No URLs found.  Press any key to exit.')
         root.term.flush()
@@ -253,17 +266,18 @@ def select_urls_term(urls, root):
         line_num = 1
         fmt = '{idx:{idx_width}}{idx_sep} {contents}'
         for n, url in enumerate(urls):
+            display_url = url.get_display_url(amt_config)
             if url.label:
                 line = fmt.format(idx=n, idx_width=idx_width, idx_sep=':',
                                   contents=url.label)
                 root.writeln(line_num, '{0}', line)
                 line = fmt.format(idx='', idx_width=idx_width, idx_sep=' ',
-                                  contents=url.display_url)
+                                  contents=display_url)
                 root.writeln(line_num + 1, '{0}', line)
                 line_num += 2
             else:
                 line = fmt.format(idx=n, idx_width=idx_width, idx_sep=':',
-                                  contents=url.display_url)
+                                  contents=display_url)
                 root.writeln(line_num, '{0}', line)
                 line_num += 1
 
@@ -307,10 +321,10 @@ def select_urls(amt_config, urls):
         term = Terminal()
         with term.program_mode() as root:
             try:
-                url = select_urls_term(urls, root)
+                url = select_urls_term(amt_config, urls, root)
             except KeyboardInterrupt:
                 url = None
         if url is not None:
             view_url(amt_config, url)
     else:
-        print_urls(urls)
+        print_urls(amt_config, urls)
