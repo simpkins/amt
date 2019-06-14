@@ -187,6 +187,14 @@ class SeqIDScanner(Scanner):
                 delay = (imap_err_count > 1)
                 self._handle_conn_error(delay=delay)
                 continue
+            except imap.ImapError as ex:
+                # For any other IMAP error, close and re-open the connection.
+                # For instance, I have seen MS Exchange simple respond with
+                # a line consisting of "Server Unavailable.", which causes
+                # us to throw ImapError() stating "unexpected response tag"
+                self._handle_conn_error(delay=True)
+                continue
+
 
             try:
                 _log.debug('waiting for new messages...')
