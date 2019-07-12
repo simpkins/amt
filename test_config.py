@@ -165,9 +165,10 @@ class TestRunner:
             self.add_failure_exc(test, 'url')
             return
 
-        if best_url.display_url != test.best_url:
+        best_url_display = best_url.get_display_url(self.amt_config)
+        if best_url_display != test.best_url:
             detail = ('expected: %s\nactual:   %s\n' %
-                      (test.best_url, best_url.display_url))
+                      (test.best_url, best_url_display))
             self.add_failure(test, 'url', detail)
         else:
             self.add_success(test, 'url')
