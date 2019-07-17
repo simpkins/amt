@@ -160,7 +160,10 @@ def _html_text_contents(elem, results):
 
 
 def get_urls_html(payload):
-    soup = bs4.BeautifulSoup(payload, 'lxml')
+    # Prefer the html5lib parser over lxml.
+    # lxml doesn't correctly parse nested elements inside anchors in some cases
+    # (like a table inside an anchor).
+    soup = bs4.BeautifulSoup(payload, 'html5lib')
 
     urls = []
     for tag in soup.find_all('a'):
