@@ -78,6 +78,10 @@ class URL:
                 return self.demangle_fb_notification_shim(url_obj)
             elif url_obj.path.startswith('/l/'):
                 return self.demangle_fb_link_shim(url_obj)
+        elif url_obj.netloc.endswith('.workplace.com'):
+            # Strip Facebook Workplace notification link shims
+            if url_obj.path == '/n/':
+                return self.demangle_fb_notification_shim(url_obj)
         elif url_obj.netloc == 'urldefense.proofpoint.com':
             # Decode proofpoint URL defense URLS.
             return self.demangle_proofpoint_urldefense(url_obj)
