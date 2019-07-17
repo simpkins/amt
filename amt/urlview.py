@@ -179,6 +179,7 @@ def get_urls_html(payload):
             value = None
         else:
             value = ' '.join(results)
+            value = value.strip()
             # Truncate to 60 characters just for legibility
             value = value[:60]
             # Replace all non-breaking space characters with spaces.
