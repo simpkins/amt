@@ -79,15 +79,17 @@ class _Pruner(object):
             self.retry_count = 0
             self.retry_limit = 3
 
-            # Older versions of MS Exchange seem to have a limit on how many
-            # messages can be updated at once.  (It would return
-            # "BAD Command Error. 10" if a STORE command has too many message
-            # IDs.)
+            # Only delete up to 256 messages at once.
             #
-            # chunk_size can be set to an integer to allow perform the
-            # deletions in chunks to avoid hitting this limit.
-            # chunk_size = 256
-            chunk_size = None
+            # Older versions of MS Exchange would explicitly fail requests with
+            # too many messages at once.  It would return
+            # "BAD Command Error. 10" if a STORE command has too many message
+            # IDs.
+            #
+            # Newer versions of MS Exchange running on office365.com simply
+            # close or reset the connection on receipt of STORE requests with
+            # large numbers of message IDs.
+            chunk_size = 256
 
             while self.uids:
                 if chunk_size is not None:
