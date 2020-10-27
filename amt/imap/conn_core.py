@@ -239,22 +239,26 @@ class ConnectionCore:
     def _sendall(self, data, timeout=None):
         # We put the socket in non-blocking mode, so we need to implement
         # sendall() ourself.
-        #
-        # First try an optimistic send, without checking the socket for
-        # writablity.
-        bytes_sent = self.sock.send(data, 0)
 
         if timeout is None:
             timeout = self.default_send_timeout
         end_time = time.time() + timeout
 
-        bytes_left = len(data) - bytes_sent
-        while bytes_left > 0:
-            # Wait for the socket to become writable
-            self._wait_for_send_ready(end_time)
-            bytes_sent = self.sock.send(data, 0)
-            assert bytes_sent <= bytes_left
-            bytes_left -= bytes_sent
+        offset = 0
+        while offset < len(data):
+            try:
+                bytes_sent = self.sock.send(data[offset:], 0)
+                assert offset + bytes_sent <= len(data)
+                offset += bytes_sent
+            except ssl.SSLWantWriteError:
+                # Wait for the socket to become writable
+                start = time.time()
+                self._wait_for_send_ready(end_time)
+                end = time.time()
+            except ssl.SSLWantReadError:
+                # This can occur if an SSL re-negotiation occurs.
+                self._wait_for_recv_ready(end_time)
+                raise
 
     def get_response(self, timeout=None):
         if timeout is None:
@@ -270,10 +274,14 @@ class ConnectionCore:
         # response.)
         recv_buf_size = 64 * 1024
         while not self._responses:
-            self._wait_for_recv_ready(end_time)
             try:
                 data = self.sock.recv(recv_buf_size)
             except ssl.SSLWantReadError as ex:
+                self._wait_for_recv_ready(end_time)
+                continue
+            except ssl.SSLWantWriteError:
+                # This can occur if an SSL re-negotiation occurs.
+                self._wait_for_send_ready(end_time)
                 continue
             except socket.error as ex:
                 if ex.errno == errno.EAGAIN:
