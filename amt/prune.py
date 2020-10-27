@@ -91,6 +91,8 @@ class _Pruner(object):
             # large numbers of message IDs.
             chunk_size = 256
 
+            idx = 0
+            total_count = len(self.uids)
             while self.uids:
                 if chunk_size is not None:
                     now = self.uids[:chunk_size]
@@ -99,8 +101,12 @@ class _Pruner(object):
                     now = self.uids
                     remaining_uids = []
 
+                idx += len(now)
                 ranges = imap_encode.collapse_seq_ranges(now)
-                logging.info(f'Deleting {ranges.decode("utf-8")}...')
+                logging.info(
+                    f'[{idx}/{total_count}] '
+                    f'Deleting {ranges.decode("utf-8")}...'
+                )
                 conn.uid_delete_msg(ranges, timeout=600)
                 self.uids = remaining_uids
 
