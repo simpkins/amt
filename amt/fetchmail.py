@@ -202,20 +202,20 @@ class SeqIDScanner(Scanner):
             except (IOError, imap.TimeoutError, imap.EOFError) as ex:
                 # Expect I/O errors, timeouts, or the server closing the
                 # connection.  Just log a message, reconnect, and continue.
-                _log.exception('I/O error: %s', ex)
+                _log.exception(f"I/O error: {ex}")
                 self._handle_conn_error()
             except imap.ImapError as ex:
                 # This happens sometimes if the server sends back
                 # a bogus response.  For instance, Exchange sometimes
                 # returns the line "Server Unavailable."
                 # Log a warning and reconnect.
-                _log.warning('unexpected IMAP error: %s')
+                _log.warning(f"unexpected IMAP error: {ex}")
                 self._handle_conn_error()
             except Exception as ex:
                 # Log all exceptions that occur.  If the error occurred
                 # while we are waiting on more responses to be available,
                 # simply log the exception and retry.
-                _log.exception('unexpected exception: %s')
+                _log.exception(f"unexpected exception: {ex}")
                 self._handle_conn_error()
 
     def _is_fatal_error(self, ex):
