@@ -2,6 +2,8 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+from __future__ import annotations
+
 import errno
 import getpass
 import fcntl
@@ -14,6 +16,7 @@ import struct
 import sys
 import tempfile
 import time
+from typing import Callable, Optional
 
 from . import getpassword
 
@@ -113,9 +116,16 @@ class Account:
         ProtocolInfo('ldap', LDAP_PORT, ssl=True),
     ]
 
-    def __init__(self, server, user,
-                 protocol=None, port=None,
-                 password_fn=None, password=None, ssl=None):
+    def __init__(
+        self,
+        server: str,
+        user: str,
+        protocol: Optional[str] = None,
+        port: Optional[int] = None,
+        password_fn: Optional[Callable[[Account], str]] = None,
+        password: Optional[str] = None,
+        ssl: Optional[bool] = None
+    ) -> None:
         self.server = server
 
         self._protocol = ProtocolInfo(protocol, port, ssl)
@@ -283,27 +293,17 @@ class LockFile:
         self.fd = None
 
 
-def get_password_keyring(account=None, server=None, user=None,
-                         protocol=None, port=None):
-    if user is None:
-        user = account.user
-    if server is None:
-        server = account.server
-    if protocol is None:
-        protocol = account.protocol
-    if port is None:
-        port = account.port
-    return getpassword.get_password(user=user, server=server,
-                                    port=port, protocol=protocol)
+def get_password_keyring(account: Account) -> str:
+    return getpassword.get_password(
+        user=account.user,
+        server=account.server,
+        port=account.port,
+        protocol=account.protocol,
+    )
 
 
-def get_password_input(account=None, server=None, user=None,
-                       protocol=None, port=None):
-    if user is None:
-        user = account.user
-    if server is None:
-        server = account.server
-    prompt = 'Password for %s@%s: ' % (user, server)
+def get_password_input(account: Account) -> str:
+    prompt = 'Password for %s@%s: ' % (account.user, account.server)
     return getpass.getpass(prompt)
 
 
