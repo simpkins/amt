@@ -2,6 +2,7 @@
 #
 # Copyright (c) 2012, Adam Simpkins
 #
+import base64
 import logging
 import time
 
@@ -214,6 +215,18 @@ class Connection(ConnectionCore):
     def change_state(self, new_state):
         self.debug('connection state change: %s', new_state)
         self.state = new_state
+
+    def oauth2(self, user: str, token: bytes) -> None:
+        auth_str = base64.b64encode(
+            b"user="
+            + user.encode("utf-8")
+            + b"\x01auth=Bearer "
+            + token
+            + b"\x01\x01"
+        )
+        if b'AUTH=XOAUTH2' not in self.get_capabilities():
+            raise Exception("server does not support OAUTH2")
+        self.run_cmd(b'AUTHENTICATE', b'XOAUTH2', auth_str, suppress_log=True)
 
     def login(self, user, password):
         if isinstance(user, str):
