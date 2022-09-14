@@ -19,7 +19,6 @@ import time
 from typing import Callable, Optional, List
 
 from . import getpassword
-from . import oauth2
 
 IMAP_PORT = 143
 IMAPS_PORT = 993
@@ -205,6 +204,11 @@ class Account:
     def _prepare_oauth2(self) -> None:
         if self._oauth2_fetcher is not None:
             return
+
+        # Defer importing the oauth2 module as late as possible.
+        # This allows the user's config files to update sys.path
+        # to point to where the Microsoft msal module can be found.
+        from . import oauth2
 
         self._oauth2_fetcher = oauth2.TokenFetcher(
             username=self.user,
