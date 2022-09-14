@@ -19,6 +19,7 @@ import time
 from typing import Callable, Optional, List
 
 from . import getpassword
+from . import oauth2
 
 IMAP_PORT = 143
 IMAPS_PORT = 993
@@ -152,6 +153,7 @@ class Account:
             self.oauth2_authority = None
             self.oath2_scopes = None
 
+        self._oauth2_fetcher = None
         if auth is None:
             self.auth = "basic"
         else:
@@ -190,12 +192,31 @@ class Account:
 
     def oauth2_token(self) -> bytes:
         if self.auth != "xoauth2":
-            raise Exception('this account does not use OAuth')
+            raise Exception("this account does not use OAuth")
 
-        raise NotImplementedError("todo: XOAUTH2")
+        if self._oauth2_fetcher is None:
+            raise Exception(
+                "prepare_auth() must be called before attempting "
+                "to use the OAuth 2 token"
+            )
+
+        return self._oauth2_fetcher.get_token()
 
     def _prepare_oauth2(self) -> None:
-        raise NotImplementedError("todo: XOAUTH2")
+        if self._oauth2_fetcher is not None:
+            return
+
+        self._oauth2_fetcher = oauth2.TokenFetcher(
+            username=self.user,
+            client_id=self.oauth2_client_id,
+            authority=self.oauth2_authority,
+            scopes=self.oath2_scopes,
+        )
+        # Fetch the token now, even though we don't actually need it yet.
+        # This ensures that if we need to prompt the user interactively that we
+        # do it during the `prepare_auth()` stage, rather than waiting  until
+        # we are actually attempting to log in.
+        self._oauth2_fetcher.get_token()
 
     def prepare_auth(self) -> None:
         if self.auth == "basic":
