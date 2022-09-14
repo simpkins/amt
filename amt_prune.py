@@ -32,7 +32,7 @@ def main():
     lock_path = os.path.join(amt_config.config_path, 'prune.lock')
     with amt.config.LockFile(lock_path):
         for config in amt_config.prune.configs:
-            config.account.prepare_password()
+            config.account.prepare_auth()
         for config in amt_config.prune.configs:
             amt.prune.prune(config)
 

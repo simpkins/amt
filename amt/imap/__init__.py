@@ -227,6 +227,7 @@ class Connection(ConnectionCore):
         if b'AUTH=XOAUTH2' not in self.get_capabilities():
             raise Exception("server does not support OAUTH2")
         self.run_cmd(b'AUTHENTICATE', b'XOAUTH2', auth_str, suppress_log=True)
+        self.change_state(STATE_AUTHENTICATED)
 
     def login(self, user, password):
         if isinstance(user, str):
@@ -237,6 +238,7 @@ class Connection(ConnectionCore):
         self.run_cmd(b'LOGIN', encode.to_astring(user),
                      encode.to_astring(password),
                      suppress_log=True)
+        self.change_state(STATE_AUTHENTICATED)
 
     def get_mailbox_delim(self):
         if self._mailbox_delim is None:
@@ -727,9 +729,16 @@ def fetch_response_to_msg(response):
 
 def login(account, class_=Connection, **kwargs):
     conn = class_(account.server, account.port, ssl=account.ssl, **kwargs)
-    try:
-        conn.login(account.user, account.password)
-    except:
-        conn.close()
-        raise
+    if account.auth == "xoauth2":
+        try:
+            conn.oauth2(account.user, account.oauth2_token())
+        except:
+            conn.close()
+            raise
+    else:
+        try:
+            conn.login(account.user, account.password)
+        except:
+            conn.close()
+            raise
     return conn

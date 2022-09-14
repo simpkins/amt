@@ -88,11 +88,9 @@ class ImapShell(cmd.Cmd):
             raise Exception('unsupported account protocol: %r' %
                             (self.account.protocol,))
 
-        print('Connecting to %s:%d' % (self.account.server, self.account.port))
-        self.conn = imap.Connection(self.account.server, self.account.port,
-                                    ssl=ssl)
-        print('Logging in as %s' % (self.account.user,))
-        self.conn.login(self.account.user, self.account.password)
+        print(f'Connecting to {self.account.server}:{self.account.port} '
+              f'as {self.account.user}')
+        self.conn = imap.login(self.account)
         print('Logged in.')
         caps = (cap.decode('utf-8', errors='replace') for cap in
                 self.conn.get_capabilities())
@@ -262,7 +260,7 @@ class ImapShell(cmd.Cmd):
 def main():
     ap = argparse.ArgumentParser()
 
-    config_group = ap.add_mutually_exclusive_group(required=True)
+    config_group = ap.add_mutually_exclusive_group()
     config_group.add_argument('-c', '--config',
                               help='The AMT configuration file')
     config_group.add_argument('-s', '--server',
@@ -282,9 +280,12 @@ def main():
 
     logging.basicConfig(level=logging.DEBUG)
 
+    if args.config is None and args.server is None:
+        args.config = "~/.amt"
+
     if args.config:
         config = amt.config.load_config(args.config)
-        account = config.default_account
+        account = config.accounts.default
     else:
         if args.user is None:
             ap.error('--user must be specified when not using a config file')
@@ -297,7 +298,7 @@ def main():
                                      password=args.password,
                                      password_fn=amt.config.get_password_input)
 
-    account.prepare_password()
+    account.prepare_auth()
 
     shell = ImapShell(account)
     shell.run()

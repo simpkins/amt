@@ -16,7 +16,7 @@ import struct
 import sys
 import tempfile
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 
 from . import getpassword
 
@@ -115,6 +115,10 @@ class Account:
         ProtocolInfo('ldaps', LDAPS_PORT, ssl=False),
         ProtocolInfo('ldap', LDAP_PORT, ssl=True),
     ]
+    SUPPORTED_AUTH_MECHANISMS = [
+        "basic",
+        "xoauth2",
+    ]
 
     def __init__(
         self,
@@ -124,12 +128,36 @@ class Account:
         port: Optional[int] = None,
         password_fn: Optional[Callable[[Account], str]] = None,
         password: Optional[str] = None,
-        ssl: Optional[bool] = None
+        ssl: Optional[bool] = None,
+        auth: Optional[str] = None,
+        oauth2_client_id: Optional[str] = None,
+        oauth2_authority: Optional[str] = None,
+        oath2_scopes: Optional[List[str]] = None,
     ) -> None:
         self.server = server
 
         self._protocol = ProtocolInfo(protocol, port, ssl)
         self._protocol.resolve(self.SUPPORTED_PROTOCOLS)
+
+        if oauth2_client_id is not None:
+            assert oauth2_authority is not None
+            assert oath2_scopes is not None
+            if auth is None:
+                auth = "xoauth2"
+            self.oauth2_client_id = oauth2_client_id
+            self.oauth2_authority = oauth2_authority
+            self.oath2_scopes = list(oath2_scopes)
+        else:
+            self.oauth2_client_id = None
+            self.oauth2_authority = None
+            self.oath2_scopes = None
+
+        if auth is None:
+            self.auth = "basic"
+        else:
+            self.auth = auth.lower()
+            if self.auth not in self.SUPPORTED_AUTH_MECHANISMS:
+                raise ValueError(f"unsupported auth mechanism {auth!r}")
 
         self.user = user
         self._password = password
@@ -151,14 +179,32 @@ class Account:
 
     @property
     def password(self):
+        if self.auth != "basic":
+            raise Exception('this account does not use basic '
+                            'password authentication')
+
         if self._password is None:
-            raise Exception('prepare_password() must be called before '
+            raise Exception('prepare_auth() must be called before '
                             'using the password field')
         return self._password
 
-    def prepare_password(self):
-        if self._password is None:
-            self._password = self._password_fn(account=self)
+    def oauth2_token(self) -> bytes:
+        if self.auth != "xoauth2":
+            raise Exception('this account does not use OAuth')
+
+        raise NotImplementedError("todo: XOAUTH2")
+
+    def _prepare_oauth2(self) -> None:
+        raise NotImplementedError("todo: XOAUTH2")
+
+    def prepare_auth(self) -> None:
+        if self.auth == "basic":
+            if self._password is None:
+                self._password = self._password_fn(account=self)
+        elif self.auth == "xoauth2":
+            self._prepare_oauth2()
+        else:
+            raise Exception(f"unknown auth mechanism: {self.auth!r}")
 
 
 class LockError(Exception):

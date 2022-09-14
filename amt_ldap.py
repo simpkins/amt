@@ -169,7 +169,7 @@ def main():
     ldap_filter, sort_key = parse_filter(parser, args)
     ldap_attrs = parse_attrs(parser, args, amt_config.ldap)
 
-    account.prepare_password()
+    account.prepare_auth()
     conn = amt.ldap.Connection(account=account)
     results = conn.search(base_dn=args.base_dn,
                           filter=ldap_filter,

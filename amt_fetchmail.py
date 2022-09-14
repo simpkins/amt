@@ -36,7 +36,7 @@ def main():
     lock_path = os.path.join(amt_config.config_path, 'fetchmail.lock')
     try:
         with amt.config.LockFile(lock_path):
-            scanner.account.prepare_password()
+            scanner.account.prepare_auth()
             scanner.run_forever()
     except KeyboardInterrupt:
         logging.info('Interrupted')
