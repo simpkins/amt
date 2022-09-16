@@ -37,7 +37,7 @@ def load_ca_certs(ctx):
 
 
 def new_ctx():
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     load_ca_certs(ctx)
     ctx.verify_mode = ssl.CERT_REQUIRED
 

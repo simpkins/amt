@@ -133,7 +133,7 @@ class ConnectionCore:
                                                  timeout=timeout)
         if use_ssl:
             ctx = ssl_util.new_ctx()
-            self.sock = ctx.wrap_socket(self.raw_sock)
+            self.sock = ctx.wrap_socket(self.raw_sock, server_hostname=server)
         else:
             self.sock = self.raw_sock
 
